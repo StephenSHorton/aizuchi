@@ -226,6 +226,17 @@ md = MarkDownRenderer("Two reasons:\\n\\n- **Conversion regressed** vs. v1 in th
 
 If a node has minimal substance (a casual mention, a one-word topic), the minimum valid body is a Card with a CardHeader. Don't skip the body — even a single-header Card is the right rendering for a thin node. Padding it with empty TextContent is worse than just the header.
 
+### Anti-template rule
+
+If your body comes out as \`Card([CardHeader(label), TextContent(description)])\` — header + a restated description, nothing else — the node hasn't earned its placement on the canvas. The viewer learns nothing the label and description don't already say. Two responses:
+
+1. **Fold the substance into an existing node's body** — don't add the new node at all. Extend a related node with an inner Callout, TextCallout, or extra TextContent.
+2. **Reach for a real component** that fits the observation's shape — Callout for risks, Steps for decisions reached through multiple considerations, ListBlock for enumerable sub-items, BarChart / LineChart for metrics across categories or time, MarkDownRenderer for multi-paragraph prose, Accordion for "background detail you'd reach for if curious," CodeBlock for actual code.
+
+A flat \`Card + CardHeader + TextContent\` body on a node claiming a slot on the canvas is templated slop. Don't ship it.
+
+(The thin-node exception above stands: when there's genuinely nothing to show beyond the label, a single \`CardHeader\` alone is correct — that's *not* the templated shape this rule prohibits.)
+
 ### Final checklist (before emitting the diff)
 
 For EVERY node in \`add_nodes\`: confirm \`body\` is populated, \`root = Card(...)\` is the first line, every helper variable is referenced from another variable, and arguments are positional (no \`name:\` syntax). Every node. No exceptions.
@@ -256,11 +267,19 @@ The goal is a map of rich, easily understood observations — not a maximalist n
 
 **Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely. Reserve nodes for substance the user would want to return to.
 
+**No business-jargon nodes.** Generic abstractions — \`alignment\`, \`synergy\`, \`scalability\`, \`strategy\`, \`roadmap\`, \`bandwidth\`, \`priorities\`, \`themes\`, \`dynamics\`, \`discussion\`, \`engagement\`, \`takeaways\` — do NOT become nodes unless the speaker actually said the word AND it refers to a specific concrete thing in this conversation. "We need to think about scalability" → not a node (vague). "Scalability of the search index is what's pushing us toward Postgres" → a \`constraint\` or \`work_item\` with the speaker's actual framing in the label. If you can't quote the exact phrase the word came from, don't extract it.
+
+**Preserve speakers' hedges.** When the speaker is uncertain — "roughly mid-July", "we're probably going to", "maybe Friday", "if it works out" — keep the hedge in the label or description, and set \`confidence: "medium"\`. Never sand "roughly mid-July" into \`dueDate: "2026-07-15"\`. False precision is worse than fuzzy honesty.
+
 **Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
 
 **Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project they're working on, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
 
 **Don't thrash.** Don't drop a stable, useful node just because the new chunk doesn't mention it. The graph is *cumulative* memory — older nodes stay valid unless contradicted. Just leave them alone.
+
+## Focus question
+
+If the user prompt includes a \`## Focus question\` block, treat that as the meeting's guiding lens — propositions that don't bear on the focus question should be demoted to a passing \`fyi\` thought or omitted entirely. The focus question doesn't shrink the graph to literally one branch — tangents that genuinely *bear on* the question still belong. It does mean you ignore unrelated chit-chat that would otherwise have produced a node.
 
 ## Node types
 
@@ -281,31 +300,47 @@ The goal is a map of rich, easily understood observations — not a maximalist n
 - **event** — something that happened or will happen at a known time (the launch, last Tuesday's outage).
 - **sentiment** — emotional tone tied to a topic/person (frustrated, excited, uncertain). Use sparingly — only when the emotion is itself the signal, not a passing aside.
 
-## Edge relations
+## Edges
 
-- **owns** — person owns a work_item
-- **depends_on** — work_item depends on another work_item
-- **blocks** — blocker blocks a work_item
-- **related_to** — generic association (use sparingly; prefer specific relations)
-- **decides** — person decides; or decision → work_item it affects
-- **asks / answers** — Q&A linkage
-- **mentions** — person refers to a topic they don't own (use sparingly)
-- **assigned_to** — action_item → person owner
-- **causes** — A causes B (use for risks → outcomes, events → consequences)
-- **contradicts** — A contradicts B (two decisions, claim vs. evidence, etc.)
-- **supports** — A reinforces B (evidence for a hypothesis, an example backing a claim)
-- **example_of** — A is a concrete instance of B
-- **alternative_to** — A is a competing option to B (use heavily when options are being weighed)
-- **precedes** — temporal ordering (A happens/happened before B; chain events)
-- **resolves** — A resolves B (decision resolves question, action_item resolves blocker, answer resolves risk)
-- **clarifies** — A clarifies B (a follow-up reframing an earlier point)
+**Every edge is a proposition.** Read it aloud as \`A <relation> B\` — if it doesn't form a complete claim a meeting participant could agree or disagree with, the edge is wrong. Bad: \`realtime_pacing in transcript_import\` (preposition, no claim). Good: \`realtime_pacing blocks transcript_import\` (claim).
+
+Each relation has an allowed type signature \`(source → target)\`. Only emit a relation when both ends match an allowed pair. Use the most specific relation that fits — generic edges produce graph-hairball clutter.
+
+**Person-anchored:**
+- **owns** \`(person → work_item, artifact)\` — the person has responsibility for it
+- **assigned_to** \`(action_item → person)\` — this commitment belongs to that person; use instead of \`owns\` for action items
+- **decides** \`(person → decision)\` or \`(decision → work_item, artifact)\` — the person made the decision, or the decision shapes the work
+- **asks** \`(person → question)\` — the person posed the question
+- **mentions** \`(person → topic, artifact, event)\` — passing reference. **Only when no specific relation fits.** Conversational addressing ("Travis, can you review?") is NOT \`mentions\` — it's an \`action_item\` \`assigned_to\` Travis.
+
+**Dependency / blocking:**
+- **depends_on** \`(work_item → work_item, artifact, constraint)\` — cannot proceed without the target
+- **blocks** \`(blocker → work_item, action_item)\` or \`(constraint → work_item, action_item)\` — actively stopping the target. Distinct from \`depends_on\` (forward-looking dependency) and \`precedes\` (temporal only).
+
+**Causal / temporal:**
+- **causes** \`(risk, event, blocker, decision → event, blocker, risk, decision)\` — A → B is a causal claim. Stronger than \`precedes\`.
+- **precedes** \`(event → event, action_item, decision)\` — pure temporal ordering. If you can say \`causes\` or \`resolves\`, prefer those.
+- **resolves** \`(decision, action_item, event, work_item → question, blocker, risk)\` — A makes B no longer apply. Pair with an \`update_nodes\` entry flipping B's \`status\` to \`"resolved"\`.
+- **answers** \`(decision, context, person → question)\` — A directly answers the question. Pair with a status flip on the question.
+
+**Argument structure:**
+- **contradicts** \`(decision, hypothesis, claim → decision, hypothesis, claim)\` — A and B are mutually exclusive; the conversation will likely resolve one
+- **supports** \`(context, event, metric, artifact → hypothesis, decision, claim)\` — A is evidence for B
+- **alternative_to** \`(decision, hypothesis, work_item → decision, hypothesis, work_item)\` — A and B are competing options; use heavily when options are being weighed
+- **example_of** \`(* → topic, work_item, hypothesis)\` — A is a concrete instance of the abstraction B
+- **clarifies** \`(* → *)\` — A reframes or refines B. Use sparingly — usually the right move is to UPDATE B's body to include the clarification, not emit a \`clarifies\` edge.
+
+**Last-resort:**
+- **related_to** \`(* → *)\` — generic association. Only when (a) no specific relation matches AND (b) the relationship is itself the claim being made. If you find yourself emitting \`related_to\` between most pairs of nodes you create, you're co-occurring, not extracting. Drop the edge.
+
+**\`related_to\` and \`mentions\` are escape valves, not workhorses.** Before emitting either, check: could \`causes\`, \`supports\`, \`clarifies\`, \`depends_on\`, \`blocks\`, \`alternative_to\`, \`example_of\`, \`resolves\`, or \`precedes\` fit? If yes, use that. If no specific relation fits AND the connection is weak, **don't emit the edge** — connecting nodes by default produces clutter, not signal.
 
 ## Status / confidence / quote / tags
 
 Optional fields on every node — use them when they add signal:
 
 - **status** — \`active\` (default, omit), \`resolved\` (a question got answered, a blocker got unblocked, a risk no longer applies), \`parked\` (set aside / "we'll come back to this"). Mark resolved by emitting an \`update_nodes\` entry; don't re-add the node.
-- **confidence** — \`high\` (default, omit), \`medium\` (speaker is hedging or you're inferring), \`low\` (you're guessing). Drop confidence to \`low\` rather than not extracting at all.
+- **confidence** — \`high\` (default, omit), \`medium\` (speaker is hedging or you're inferring), \`low\` (you're guessing). Drop confidence to \`low\` rather than not extracting at all. This is your hedge-preservation lever — pair it with the speaker's actual hedging language in the label, not a sanded-off "structured" guess.
 - **quote** — a verbatim transcript snippet (≤200 chars) that grounded the node. Use the speaker's actual words, not a paraphrase. Strongest on \`decision\`, \`risk\`, \`assumption\`, \`hypothesis\`, \`metric\`, \`sentiment\`.
 - **tags** — free-form lowercase labels you invent (e.g. \`security\`, \`q3\`, \`customer-driven\`). Useful for cross-cutting themes that aren't worth their own node.
 
@@ -324,17 +359,16 @@ These optional fields apply to specific types. Set them whenever the speaker giv
 
 ## Layout
 
-You don't pick coordinates — a force-directed simulation arranges the canvas. Your job is to emit the right edges. Strong relations (\`causes\`, \`supports\`, \`resolves\`, \`clarifies\`, \`contradicts\`, \`assigned_to\`, \`owns\`, \`blocks\`, \`depends_on\`) pull connected nodes tight; \`related_to\` and \`mentions\` are loose. So **prefer specific relations** over \`related_to\` whenever you can — it's not just for clarity, it's what makes the visual cluster.
+You don't pick coordinates — a force-directed simulation arranges the canvas. Strong relations (\`causes\`, \`supports\`, \`resolves\`, \`clarifies\`, \`contradicts\`, \`assigned_to\`, \`owns\`, \`blocks\`, \`depends_on\`) pull connected nodes tight; \`related_to\` is loose. The visual cluster follows the proposition you emit — not a layout knob you turn.
 
 ## Stable ids
 
 snake_case slugs from labels. "Travis Chen" → \`travis_chen\`. "Postgres migration" → \`postgres_migration\`. Once an id exists, reuse it across passes. To merge late-discovered duplicates, emit \`merge_nodes\` (preferred) — \`remove_nodes\` is for reclassification, not deduplication.
 
-## Edges
+## Edge mechanics
 
 - Every edge's \`from\` and \`to\` must reference a node already in the graph or being added in this same diff.
-- Don't emit \`related_to\` when a more specific edge already covers it (\`alice owns project_x\` implies \`related_to\`).
-- Conversational addressing ("Travis, can you review?") is *not* a \`mentions\` edge — it's an action_item assigned_to Travis.
+- Edge \`id\` is a slug like \`<from>-<relation>-<to>\` or any unique string; reuse the same id across passes when re-asserting the same edge.
 
 ## Thoughts (notes)
 
@@ -363,7 +397,7 @@ When a thought becomes resolved, either drop it from the list or change its inte
 
 When \`no_changes: true\`, all arrays must be empty.
 
-## Worked example — solo monologue
+## Worked example — solo monologue (demonstrates *consolidate over fragment*)
 
 **Current graph:**
 \`\`\`json
@@ -388,16 +422,17 @@ You: You can take an existing potato, plant it in the ground, and it grows more 
 {
   "no_changes": false,
   "add_nodes": [
-    { "id": "potato", "label": "Potato", "type": "topic", "speaker": "You" },
-    { "id": "potato_propagation", "label": "Potato propagation", "type": "context", "description": "You can replant a piece of an existing potato to grow more.", "speaker": "You" },
-    { "id": "potato_sustainability", "label": "Sustainability", "type": "context", "description": "Potatoes are described as a sustainable food source.", "speaker": "You" },
-    { "id": "potato_ketchup", "label": "Goes with ketchup", "type": "topic", "speaker": "You" }
+    {
+      "id": "potato",
+      "label": "Potato",
+      "type": "topic",
+      "speaker": "You",
+      "quote": "You can take an existing potato, plant it in the ground, and it grows more potatoes. They're really sustainable. And they're great with ketchup.",
+      "body": "root = Card([head, list])\\nhead = CardHeader(\\"Potato\\", \\"speaker's test subject\\")\\nlist = ListBlock([i1, i2, i3])\\ni1 = ListItem(\\"Propagation\\", \\"Replant a piece to grow more.\\")\\ni2 = ListItem(\\"Sustainable\\", \\"Described as a sustainable food source.\\")\\ni3 = ListItem(\\"Goes with ketchup\\")"
+    }
   ],
   "add_edges": [
-    { "id": "you-mentions-potato", "from": "you", "to": "potato", "relation": "mentions" },
-    { "id": "potato-related_to-potato_propagation", "from": "potato", "to": "potato_propagation", "relation": "related_to" },
-    { "id": "potato-related_to-potato_sustainability", "from": "potato", "to": "potato_sustainability", "relation": "related_to" },
-    { "id": "potato-related_to-potato_ketchup", "from": "potato", "to": "potato_ketchup", "relation": "related_to" }
+    { "id": "you-mentions-potato", "from": "you", "to": "potato", "relation": "mentions" }
   ],
   "update_nodes": [],
   "merge_nodes": [],
@@ -408,16 +443,12 @@ You: You can take an existing potato, plant it in the ground, and it grows more 
       "id": "test_subject_meta",
       "text": "Speaker is using potatoes as a test subject for this tool — graph content may not reflect real-world priorities.",
       "intent": "observation"
-    },
-    {
-      "id": "potato_facets_growing",
-      "text": "Speaker has touched on cultivation and sustainability of potatoes — could keep going on culinary uses or history.",
-      "intent": "pattern",
-      "references": ["potato"]
     }
   ]
 }
 \`\`\`
+
+Note: the chunk mentions three facets of one thing (propagation, sustainability, culinary use). Old style would have emitted four nodes linked by \`related_to\`. New style folds the facets into one rich \`topic\` body using \`ListBlock\` — fewer nodes, denser substance, no \`related_to\` clutter. The \`mentions\` edge from \`you\` is kept because there's no more specific relation between speaker and topic.
 
 ${OPENUI_LANG_NODE_BODY}`;
 
@@ -457,11 +488,19 @@ The goal is a map of rich, easily understood observations — not a maximalist n
 
 **Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely.
 
+**No business-jargon nodes.** Generic abstractions — \`alignment\`, \`synergy\`, \`scalability\`, \`strategy\`, \`roadmap\`, \`bandwidth\`, \`priorities\`, \`themes\`, \`dynamics\`, \`discussion\`, \`engagement\`, \`takeaways\` — do NOT become nodes unless the speaker actually said the word AND it refers to a specific concrete thing in this monologue. "We need to think about scalability" → not a node (vague). "Scalability of the search index is what's pushing us toward Postgres" → a \`constraint\` or \`work_item\` with the speaker's actual framing in the label. If you can't quote the exact phrase, don't extract it.
+
+**Preserve speakers' hedges.** When the speaker is uncertain — "roughly mid-July", "probably", "maybe Friday", "if it works out" — keep the hedge in the label or description, and set \`confidence: "medium"\`. Never sand "roughly mid-July" into \`dueDate: "2026-07-15"\`. False precision is worse than fuzzy honesty.
+
 **Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
 
 **Be willing to restructure.** If a classification turns out wrong, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
 
 **Don't thrash.** The graph is *cumulative* memory — older nodes stay valid unless contradicted.
+
+## Focus question
+
+If the user prompt includes a \`## Focus question\` block, treat that as the speaker's guiding lens — material that doesn't bear on the focus question should be demoted to a passing \`fyi\` thought or omitted. Tangents that genuinely *bear on* the question still belong; unrelated digressions don't.
 
 ## Node types (substance subset)
 
@@ -483,29 +522,42 @@ The goal is a map of rich, easily understood observations — not a maximalist n
 
 \`person\` is **excluded** in this mode.
 
-## Edge relations (substance subset)
+## Edges (substance subset)
 
-- **depends_on** — work_item depends on another work_item
-- **blocks** — blocker blocks a work_item
-- **related_to** — generic association (use sparingly; prefer specific relations)
-- **answers** — for explicit Q→A linkage between content nodes
-- **causes** — A causes B
-- **contradicts** — A contradicts B
-- **supports** — A reinforces B (evidence for a hypothesis, etc.)
-- **example_of** — A is a concrete instance of B
-- **alternative_to** — A is a competing option to B
-- **precedes** — temporal ordering (A before B)
-- **resolves** — A resolves B (decision resolves question, action_item resolves blocker)
-- **clarifies** — A clarifies B (a follow-up that reframes an earlier point)
+**Every edge is a proposition.** Read it aloud as \`A <relation> B\` — if it doesn't form a complete claim, the edge is wrong. Bad: \`realtime_pacing in transcript_import\` (preposition, no claim). Good: \`realtime_pacing blocks transcript_import\` (claim).
 
-\`owns\`, \`assigned_to\`, \`mentions\`, \`decides\`, \`asks\` are **excluded** because they require a person on one side.
+Each relation has an allowed type signature \`(source → target)\`. Only emit when both ends match. Use the most specific relation that fits.
+
+**Dependency / blocking:**
+- **depends_on** \`(work_item → work_item, artifact, constraint)\` — cannot proceed without the target
+- **blocks** \`(blocker → work_item, action_item)\` or \`(constraint → work_item)\` — actively stopping the target. Distinct from \`depends_on\` (forward-looking) and \`precedes\` (temporal only).
+
+**Causal / temporal:**
+- **causes** \`(risk, event, blocker, decision → event, blocker, risk, decision)\` — A → B is a causal claim. Stronger than \`precedes\`.
+- **precedes** \`(event → event, action_item, decision)\` — pure temporal ordering. If you can say \`causes\` or \`resolves\`, prefer those.
+- **resolves** \`(decision, action_item, event, work_item → question, blocker, risk)\` — A makes B no longer apply. Pair with an \`update_nodes\` entry flipping B's \`status\` to \`"resolved"\`.
+- **answers** \`(decision, context → question)\` — A directly answers the question. Pair with a status flip.
+
+**Argument structure:**
+- **contradicts** \`(decision, hypothesis, claim → decision, hypothesis, claim)\` — A and B are mutually exclusive
+- **supports** \`(context, event, metric, artifact → hypothesis, decision, claim)\` — A is evidence for B
+- **alternative_to** \`(decision, hypothesis, work_item → decision, hypothesis, work_item)\` — A and B are competing options
+- **example_of** \`(* → topic, work_item, hypothesis)\` — A is a concrete instance of the abstraction B
+- **clarifies** \`(* → *)\` — A reframes or refines B. Use sparingly — usually the right move is to UPDATE B's body, not emit a \`clarifies\` edge.
+
+**Last-resort:**
+- **related_to** \`(* → *)\` — generic association. Only when (a) no specific relation matches AND (b) the relationship is itself the claim being made. If you find yourself emitting \`related_to\` between most pairs of nodes, you're co-occurring, not extracting. Drop the edge.
+
+**\`related_to\` is an escape valve, not a workhorse.** Before emitting it, check: could \`causes\`, \`supports\`, \`clarifies\`, \`depends_on\`, \`blocks\`, \`alternative_to\`, \`example_of\`, \`resolves\`, or \`precedes\` fit? If yes, use that. If no, **don't emit the edge** — connecting nodes by default produces clutter, not signal.
+
+\`owns\`, \`assigned_to\`, \`mentions\`, \`decides\`, \`asks\` are **excluded** in this mode because they require a person on one side.
 
 ## Status / confidence / quote / tags
 
 Optional fields on every node — use them when they add signal:
 
 - **status** — \`active\` (default, omit), \`resolved\` (a question got answered, a blocker got unblocked, a risk no longer applies), \`parked\` (set aside). Mark resolved via \`update_nodes\`; don't re-add.
-- **confidence** — \`high\` (default, omit), \`medium\` (hedging / inferred), \`low\` (guessing). Prefer demoting confidence over dropping the node.
+- **confidence** — \`high\` (default, omit), \`medium\` (hedging / inferred), \`low\` (guessing). Prefer demoting confidence over dropping the node. This is your hedge-preservation lever — pair it with the speaker's actual hedging language in the label, not a sanded-off guess.
 - **quote** — verbatim transcript snippet (≤200 chars) that grounded the node. Strongest on \`decision\`, \`risk\`, \`assumption\`, \`hypothesis\`, \`metric\`, \`sentiment\`.
 - **tags** — free-form lowercase labels you invent (e.g. \`security\`, \`q3\`).
 
@@ -524,16 +576,16 @@ These optional fields apply to specific types. Set them whenever the transcript 
 
 ## Layout
 
-You don't pick coordinates — a force-directed simulation arranges the canvas. Your job is to emit the right edges. Strong relations (\`causes\`, \`supports\`, \`resolves\`, \`clarifies\`, \`contradicts\`, \`blocks\`, \`depends_on\`) pull connected nodes tight; \`related_to\` is loose. So **prefer specific relations** over \`related_to\` whenever you can — it's not just for clarity, it's what makes the visual cluster.
+You don't pick coordinates — a force-directed simulation arranges the canvas. Strong relations (\`causes\`, \`supports\`, \`resolves\`, \`clarifies\`, \`contradicts\`, \`blocks\`, \`depends_on\`) pull connected nodes tight; \`related_to\` is loose. The visual cluster follows the proposition you emit — not a layout knob you turn.
 
 ## Stable ids
 
 snake_case slugs from labels. "Postgres migration" → \`postgres_migration\`. Once an id exists, reuse it across passes. To merge late-discovered duplicates, emit \`merge_nodes\` (preferred) — \`remove_nodes\` is for reclassification.
 
-## Edges
+## Edge mechanics
 
 - Every edge's \`from\` and \`to\` must reference a node already in the graph or being added in this same diff.
-- Don't emit \`related_to\` when a more specific edge already covers it.
+- Edge \`id\` is a slug like \`<from>-<relation>-<to>\` or any unique string; reuse the same id across passes when re-asserting the same edge.
 
 ## Thoughts (notes)
 
@@ -560,7 +612,7 @@ When a thought becomes resolved, either drop it or change its intent to \`fyi\` 
 
 \`no_changes: true\` only when the chunk and recent transcript genuinely add nothing — pure silence, throat-clearing, "uh", "(wind howling)" with no signal. Most of the time you should be producing something. When \`no_changes: true\`, all arrays must be empty.
 
-## Worked example — voice memo
+## Worked example — voice memo (demonstrates *every edge a proposition*)
 
 **Current graph:** \`{ "nodes": [], "edges": [] }\`
 
@@ -581,13 +633,25 @@ unknown: Transcript import sidesteps that entirely. If we drop realtime pacing f
 {
   "no_changes": false,
   "add_nodes": [
-    { "id": "extraction_pipeline_testing", "label": "Faster extraction-pipeline testing", "type": "topic" },
-    { "id": "realtime_pacing_constraint", "label": "Realtime pacing slows iteration", "type": "blocker", "description": "Live meetings cost real time per iteration on the graph mutation loop." },
-    { "id": "transcript_import", "label": "Transcript import (offline mode)", "type": "work_item", "description": "Drop realtime pacing for offline sources so a 30-minute fixture runs as fast as the model returns." }
+    {
+      "id": "realtime_pacing_constraint",
+      "label": "Realtime pacing slows extraction iteration",
+      "type": "blocker",
+      "description": "Live meetings cost real time per iteration on the graph mutation loop.",
+      "quote": "The realtime pacing is the main thing slowing down iteration.",
+      "body": "root = Card([head, callout])\\nhead = CardHeader(\\"Realtime pacing\\", \\"gates iteration speed\\")\\ncallout = Callout(\\"warning\\", \\"Iteration cost = meeting length\\", \\"Each test of the extraction loop costs as long as the meeting it consumes.\\")"
+    },
+    {
+      "id": "transcript_import",
+      "label": "Transcript import (offline mode)",
+      "type": "work_item",
+      "description": "Drop realtime pacing for offline sources — a 30-minute fixture runs as fast as the model returns.",
+      "quote": "If we drop realtime pacing for offline sources, we can chew through a thirty-minute fixture as fast as the model returns.",
+      "body": "root = Card([head, steps])\\nhead = CardHeader(\\"Transcript import\\", \\"offline alternative to realtime capture\\")\\nsteps = Steps([s1, s2])\\ns1 = StepsItem(\\"Drop realtime pacing\\", \\"For offline sources only — live capture stays paced.\\")\\ns2 = StepsItem(\\"Chew through fixtures at model speed\\", \\"30-min fixture runs as fast as the model returns.\\")"
+    }
   ],
   "add_edges": [
-    { "id": "blocker-blocks-extraction_pipeline_testing", "from": "realtime_pacing_constraint", "to": "extraction_pipeline_testing", "relation": "blocks" },
-    { "id": "transcript_import-related_to-extraction_pipeline_testing", "from": "transcript_import", "to": "extraction_pipeline_testing", "relation": "related_to" }
+    { "id": "transcript_import-resolves-realtime_pacing_constraint", "from": "transcript_import", "to": "realtime_pacing_constraint", "relation": "resolves" }
   ],
   "update_nodes": [],
   "merge_nodes": [],
@@ -598,13 +662,13 @@ unknown: Transcript import sidesteps that entirely. If we drop realtime pacing f
       "id": "iteration_speed_theme",
       "text": "The whole memo is framed around iteration speed on the extraction pipeline.",
       "intent": "pattern",
-      "references": ["extraction_pipeline_testing"]
+      "references": ["transcript_import"]
     }
   ]
 }
 \`\`\`
 
-Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges.
+Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges. Two distinct nodes with distinct lifecycles (the blocker exists independently; the work_item is a proposed solution). The edge \`transcript_import resolves realtime_pacing_constraint\` reads as a proposition. An old-style \`topic\` node for "extraction-pipeline testing" plus \`related_to\` edges would have added a generic anchor and ambiguous edges with no new substance — dropped.
 
 ${OPENUI_LANG_NODE_BODY}`;
 
@@ -656,9 +720,15 @@ You return a single \`GraphDiff\`. Same schema, same vocabulary as the streaming
    * **question** for genuinely open questions left at the end. Use \`status: "active"\`.
    Don't fabricate. If the speakers didn't raise it, don't add it.
 
+## Focus question
+
+If the user prompt includes a \`## Focus question\` block, treat it as the meeting's guiding lens — the summary node should orient toward it, and loose ends you surface should be ones that bear on it. Don't add off-topic loose ends just because the speakers mentioned them.
+
 ## Vocabulary
 
 Same as the streaming prompt. Node types: \`person\`, \`topic\`, \`work_item\`, \`blocker\`, \`decision\`, \`action_item\`, \`question\`, \`context\`, \`risk\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`metric\`, \`artifact\`, \`event\`, \`sentiment\`. Edge relations: \`owns\`, \`depends_on\`, \`blocks\`, \`related_to\`, \`decides\`, \`asks\`, \`answers\`, \`mentions\`, \`assigned_to\`, \`causes\`, \`contradicts\`, \`supports\`, \`example_of\`, \`alternative_to\`, \`precedes\`, \`resolves\`, \`clarifies\`. Optional fields: \`status\` (\`active\` / \`resolved\` / \`parked\`), \`confidence\` (\`high\` / \`medium\` / \`low\`), \`quote\` (≤200 chars verbatim), \`tags\`, plus the type-specific structured fields (\`likelihood\`, \`impact\`, \`prediction\`, \`value\`, \`target\`, \`unit\`, \`occurredAt\`, \`limit\`, \`dueDate\`, \`tone\`, \`alternative\`).
+
+**Edge proposition test applies here too.** Every edge you emit must read as a complete claim \`A <relation> B\`. \`related_to\` and \`mentions\` are escape valves, not workhorses — prefer specific relations and drop the edge entirely when no specific relation fits and the connection is weak. **Hedge preservation applies too** — keep the speakers' uncertainty words in labels and descriptions; don't sand them into false-precision structured fields.
 
 ## Mode awareness
 
@@ -699,12 +769,32 @@ export interface PromptInput {
 	previousThoughts: AIThought[];
 	recentTranscript: string;
 	chunkText: string;
+	/**
+	 * Optional focus question / agenda / topic for this meeting. When set,
+	 * the system prompt's "## Focus question" section tells the model to
+	 * treat it as a relevance lens — material that doesn't bear on it gets
+	 * demoted or dropped. Leave undefined when no topic is known (e.g. the
+	 * "start meeting" code path before the user has typed one in).
+	 */
+	meetingTopic?: string;
 }
 
 export interface FinalizePromptInput {
 	currentGraphJson: string;
 	previousThoughts: AIThought[];
 	fullTranscript: string;
+	/** See {@link PromptInput.meetingTopic}. */
+	meetingTopic?: string;
+}
+
+function focusBlock(meetingTopic: string | undefined): string {
+	const trimmed = meetingTopic?.trim();
+	if (!trimmed) return "";
+	return `## Focus question
+
+${trimmed}
+
+`;
 }
 
 export function buildUserPrompt(input: PromptInput): string {
@@ -714,7 +804,7 @@ export function buildUserPrompt(input: PromptInput): string {
 			: JSON.stringify(input.previousThoughts, null, 2);
 	const recentBlock =
 		input.recentTranscript.trim() || "(this is the first chunk)";
-	return `## Current graph state
+	return `${focusBlock(input.meetingTopic)}## Current graph state
 
 \`\`\`json
 ${input.currentGraphJson}
@@ -747,7 +837,7 @@ export function buildFinalizeUserPrompt(input: FinalizePromptInput): string {
 			? "(none)"
 			: JSON.stringify(input.previousThoughts, null, 2);
 	const transcriptBlock = input.fullTranscript.trim() || "(empty)";
-	return `## Current graph state (post streaming-batches)
+	return `${focusBlock(input.meetingTopic)}## Current graph state (post streaming-batches)
 
 \`\`\`json
 ${input.currentGraphJson}
