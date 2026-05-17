@@ -2,6 +2,101 @@ import type { ExtractionMode } from "./persistence";
 import type { AIThought } from "./schemas";
 
 /**
+ * AIZ-52 — OpenUI Lang body emission rules. Appended to both the
+ * attribution and substance system prompts so rich-typed nodes
+ * (decision / risk / metric / event) carry an OpenUI Lang `body`
+ * that the frontend renders via `<Renderer>` instead of the typed
+ * pill.
+ *
+ * Curated to a small component subset (Card / TextContent / CardHeader /
+ * Callout / TextCallout / TagBlock / Stack / LineChart / Series) so
+ * Gemma 4 8B has a tight surface to track — the full openuiChatLibrary
+ * prompt is ~15 KB and would dominate the extraction context.
+ *
+ * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
+ * "no JSON / no code fences", "single root", "no invented components."
+ */
+const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body (rich types only)
+
+For these node types, emit a \`body\` field containing OpenUI Lang DSL alongside the other fields:
+
+- **decision** — required
+- **risk** — required
+- **metric** — required
+- **event** — required
+
+For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\`): **omit the body field.** The canvas renders these as the existing typed pill.
+
+### Hard rules
+
+- The \`body\` value is a STRING containing raw OpenUI Lang DSL. Not JSON. Not wrapped in markdown code fences. Not commentary.
+- Use variable-assignment syntax: \`root = ...\` then helper vars on their own lines.
+- Emit a single \`root = ...\` definition per body. No duplicates.
+- Only use the components listed below — do not invent new component names.
+- Keep it compact. The body renders in a ~280px-wide DOM box on the canvas. Aim for one Card with a header + 1-2 inner elements. No multi-tab dashboards.
+- Don't fabricate numbers, dates, or relationships that aren't in the chunk.
+
+### Component schema (the only components allowed)
+
+\`Card(children)\` — outer container. \`children\` is an array.
+
+\`CardHeader(title, subtitle?)\` — header inside a Card. Both strings.
+
+\`TextContent(text, size?)\` — text block. \`size\` is one of: \`"small"\`, \`"small-heavy"\`, \`"default"\`, \`"default-heavy"\`, \`"large"\`, \`"large-heavy"\`, \`"x-large"\`, \`"x-large-heavy"\`.
+
+\`Callout(variant, title, description)\` — boxed callout. \`variant\` is one of: \`"info"\`, \`"warning"\`, \`"success"\`, \`"danger"\`.
+
+\`TextCallout(variant, text)\` — single-line callout. Same variants as Callout.
+
+\`TagBlock(tags)\` — row of tag chips. \`tags\` is an array of strings.
+
+\`Stack(children, orientation?, gap?)\` — flex container. \`orientation\` is \`"row"\` or \`"column"\` (default). \`gap\` is \`"s"\`, \`"m"\` (default), or \`"l"\`.
+
+\`LineChart(xValues, [series])\` — only for metrics with multiple values. \`xValues\` is an array of strings or numbers; \`series\` is an array of \`Series(name, values)\`.
+
+\`Series(name, values)\` — chart series.
+
+### Examples
+
+A **risk** node body (likelihood/impact dots are already drawn in the pill chrome — don't duplicate them numerically):
+
+\`\`\`
+root = Card([head, callout])
+head = CardHeader("Campaign inconsistency Co-CI ↔ Solomar")
+callout = Callout("warning", "High-likelihood high-impact", "Constant flipping between the two campaigns is causing downstream issues.")
+\`\`\`
+
+A **decision** node body:
+
+\`\`\`
+root = Card([head, body])
+head = CardHeader("Postgres over MySQL")
+body = TextCallout("info", "Alternative weighed and rejected: MySQL.")
+\`\`\`
+
+A **metric** node body (single value):
+
+\`\`\`
+root = Card([head, val, sub])
+head = CardHeader("p95 latency")
+val = TextContent("180ms", "x-large-heavy")
+sub = TextContent("Target: 200ms", "small")
+\`\`\`
+
+An **event** node body:
+
+\`\`\`
+root = Card([head, sub])
+head = CardHeader("Postgres migration ship", "Friday EOD")
+sub = TextContent("Cuts over the staging DB to the new primary.")
+\`\`\`
+
+### What to do if you're unsure
+
+If a rich-type node truly has no extra substance worth visualizing (a bare \`decision\` with no rationale, a \`metric\` whose value wasn't stated), still emit a valid \`body\` — minimum is a Card with a CardHeader and one TextContent. Don't skip the body for required types.
+`;
+
+/**
  * AIZ-32 — attribution-mode system prompt (today's behavior). Used when
  * the input has 2+ distinct named speakers. Includes the `person` node
  * type and speaker-aware extraction guidance.
@@ -181,7 +276,9 @@ You: You can take an existing potato, plant it in the ground, and it grows more 
     }
   ]
 }
-\`\`\``;
+\`\`\`
+
+${OPENUI_LANG_NODE_BODY}`;
 
 /**
  * AIZ-32 — substance-mode system prompt. Used when the input has 0 or 1
@@ -360,7 +457,9 @@ unknown: Transcript import sidesteps that entirely. If we drop realtime pacing f
 }
 \`\`\`
 
-Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges.`;
+Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges.
+
+${OPENUI_LANG_NODE_BODY}`;
 
 /**
  * AIZ-32 — pick the system prompt that matches the input. Defaults to
@@ -440,7 +539,13 @@ The \`notes\` array works the same way — emit new or changed thoughts only. Af
 
 ## Output
 
-A standard \`GraphDiff\`. \`no_changes: false\` in almost every case. The downstream \`applyDiff\` path is the same one the streaming passes use — there is no separate finalize-only diff format.`;
+A standard \`GraphDiff\`. \`no_changes: false\` in almost every case. The downstream \`applyDiff\` path is the same one the streaming passes use — there is no separate finalize-only diff format.
+
+${OPENUI_LANG_NODE_BODY}
+
+### Finalize-pass specific note
+
+If a rich-typed node already exists in the input graph without a \`body\`, fill it in by emitting an \`update_nodes\` entry with just \`{ id, body: "..." }\`. Don't re-emit unchanged fields. If a body already exists and is reasonable, leave it alone — don't churn good output.`;
 
 export interface PromptInput {
 	currentGraphJson: string;

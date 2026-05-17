@@ -13,6 +13,7 @@ import { LiveTranscript } from "@/components/aizuchi/LiveTranscript";
 import { MeetingCanvas } from "@/components/aizuchi/MeetingCanvas";
 import { MeetingOutline } from "@/components/aizuchi/MeetingOutline";
 import { MeetingStatusPanel } from "@/components/aizuchi/MeetingStatusPanel";
+import { NodeBodyLayer } from "@/components/aizuchi/NodeBodyLayer";
 import { useCommandPaletteHotkey } from "@/hooks/useCommandPaletteHotkey";
 import { useForceLayout } from "@/hooks/useForceLayout";
 import { useMeetingDebugSnapshot } from "@/hooks/useMeetingDebugSnapshot";
@@ -305,7 +306,8 @@ function MeetingPrototype() {
 								onPaneClick={onPaneClick}
 								onNodeHover={onNodeHover}
 							>
-								<div className="pointer-events-none absolute inset-0">
+								<NodeBodyLayer graph={session.graph} />
+								<div className="pointer-events-none absolute inset-0 z-20">
 									<div className="pointer-events-auto absolute top-2 left-2">
 										<MeetingStatusPanel
 											status={session.status}

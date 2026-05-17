@@ -1102,6 +1102,11 @@ function drawNodes(
 		const layout = state.nodeLayouts.get(n.id);
 		if (!p || !layout) continue;
 
+		// AIZ-52 — nodes with an OpenUI Lang body are rendered by NodeBodyLayer
+		// in DOM, not as a canvas pill. Skip pill drawing for those; edges
+		// still connect to the node's rect center so the graph stays coherent.
+		if (typeof n.body === "string" && n.body.length > 0) continue;
+
 		const inN = neighborhood?.nodeIds.has(n.id) ?? false;
 		const dimmed = !!neighborhood && !inN;
 		const focused = n.id === state.selectedId;
