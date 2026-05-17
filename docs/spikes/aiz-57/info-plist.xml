@@ -1,0 +1,30 @@
+<!--
+  Aizuchi iOS Info.plist additions required by tauri-plugin-aizuchi-audio.
+
+  The Tauri iOS bundler emits the per-app Info.plist into
+  `src-tauri/gen/apple/<app>.xcodeproj/<app>_iOS/Info.plist` on first
+  `tauri ios init`. The `src-tauri/Info.plist` in this repo is the
+  shared template Tauri reads first; the keys below need to be present
+  in whichever Plist actually ships in the iOS bundle.
+
+  Drop the two keys below into the existing <dict> at the top level.
+  Do NOT replace the existing `NSMicrophoneUsageDescription` — it's
+  already correct for the desktop path and the same string works on
+  iOS.
+-->
+<key>NSMicrophoneUsageDescription</key>
+<string>Aizuchi captures your meeting audio to transcribe it into a live mind-map. Audio stays on your device — nothing is sent to a server.</string>
+
+<key>UIBackgroundModes</key>
+<array>
+    <!--
+      Required so AVAudioEngine keeps delivering tap callbacks when
+      the screen is locked or the user switches apps mid-meeting.
+      Without this, iOS suspends the audio engine within ~30 seconds
+      of the app going to the background.
+
+      App Review flags background-audio entitlements aggressively;
+      see app-review-notes.md for the reviewer framing.
+    -->
+    <string>audio</string>
+</array>
