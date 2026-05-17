@@ -2,11 +2,10 @@ import type { ExtractionMode } from "./persistence";
 import type { AIThought } from "./schemas";
 
 /**
- * AIZ-52 — OpenUI Lang body emission rules. Appended to both the
- * attribution and substance system prompts so rich-typed nodes
- * (decision / risk / metric / event) carry an OpenUI Lang `body`
- * that the frontend renders via `<Renderer>` instead of the typed
- * pill.
+ * AIZ-52 / AIZ-59 — OpenUI Lang body emission rules. Appended to both the
+ * attribution and substance system prompts. Every node Gemma adds carries
+ * an OpenUI Lang `body` that the frontend renders via `<Renderer>`. No
+ * "type-based pills" any more — the entire mind-map is composed by Gemma.
  *
  * Curated to a small component subset (Card / TextContent / CardHeader /
  * Callout / TextCallout / TagBlock / Stack / LineChart / Series) so
@@ -16,13 +15,17 @@ import type { AIThought } from "./schemas";
  * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
  * "no JSON / no code fences", "single root", "no invented components."
  */
-const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — REQUIRED on rich types
+const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — REQUIRED on every node you add
 
-Every \`decision\`, \`risk\`, \`metric\`, or \`event\` node MUST include a \`body\` field containing OpenUI Lang DSL. This is non-negotiable — these node types do not render correctly on the canvas without a body. Treat the \`body\` field as if it were required by the schema even though Zod marks it optional.
+Every node you add MUST include a \`body\` field containing OpenUI Lang DSL. This is non-negotiable — without a body, the node has no visual on the canvas. Treat \`body\` as if Zod required it (it's marked optional only so older snapshots remain valid).
 
-Before you finalize \`add_nodes\` for the response, scan every node you've added. For each \`decision\` / \`risk\` / \`metric\` / \`event\`: if \`body\` is missing or empty, fill it in following the patterns below.
+You have full creative freedom over what the body looks like. Pick the components that best fit the observation. A risk might be a single \`Callout("danger", ...)\`. A decision might be a header + rationale + alternative. A metric might be an x-large-heavy value tile, or a LineChart if there's a series. A casual topic might be just a header. There are no required templates per type — compose what fits.
 
-For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\`), omit \`body\`. The canvas renders those as the existing typed pill.
+### Composition latitude — sometimes one rich node beats three thin ones
+
+The graph encodes RELATIONSHIPS between distinct things. A single node's BODY encodes the richness WITHIN one observation. When a chunk produces material that's a single coherent thought (a decision with rationale + alternatives + a related risk), you can express that as one Card with multiple inner Callouts and TextContents — instead of fragmenting into one \`decision\` + one \`risk\` + one \`context\` linked by edges. Use your judgement: graph-shaped material (many distinct things linked) → many nodes; observation-shaped material (one thing with depth) → one rich body.
+
+When you do fragment into many nodes, keep their bodies appropriate: a casual \`mentions\`-edge target doesn't need a Callout, just a small header.
 
 ### Hard rules
 
@@ -54,15 +57,17 @@ For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`
 
 \`Series(name, values)\` — chart series.
 
-### Type-specific patterns
+### Useful patterns (not required templates)
 
-**risk** — lead with \`Callout(variant, ...)\`. Pick the variant by severity: \`"danger"\` for high-likelihood + high-impact, \`"warning"\` for medium severity, \`"info"\` for low. Mention the actual likelihood/impact words in the title (e.g. "High likelihood / high impact"). The pill chrome already draws severity dots — your body adds the explanation.
+These are suggestions for common shapes. You're free to use any combination, or to invent your own composition from the components above.
 
-**decision** — lead with the CHOICE in a CardHeader (large, declarative). If an alternative was rejected, use \`TextCallout("info", "Alternative weighed: X.")\`. If a rationale was stated, add a \`TextContent\` (size \`"default"\`). Avoid headers like "Decision:" — the type itself signals it.
-
-**metric** — lead with the VALUE in a \`TextContent(value, "x-large-heavy")\`. If a target was stated, add \`TextContent("Target: ...", "small")\`. If multiple values over time are mentioned, use \`LineChart\`. The label/topic goes in a CardHeader ABOVE the value.
-
-**event** — lead with the date/timing in a CardHeader subtitle slot. The event label is the title. Add a \`TextContent\` describing what happens, if more than the label was said.
+- A risk where likelihood + impact are stated → \`Callout(variant, ...)\` with variant from severity ("danger" for high/high, "warning" for medium, "info" for low). Put the severity words in the title.
+- A decision with an explicit alternative → CardHeader of the choice + \`TextContent\` rationale + \`TextCallout("info", "Alternative weighed: X.")\`.
+- A metric with a value + target → \`TextContent(value, "x-large-heavy")\` lead, \`TextContent("Target: …", "small")\` sub.
+- A metric over time → \`LineChart\`.
+- An event with a date → CardHeader title + date as subtitle.
+- A person or topic with little extra substance → a single CardHeader is enough. Don't pad.
+- A casual mention → a small \`TextContent\` is fine. Don't dress up something that's just a passing reference.
 
 ### Examples
 
@@ -120,13 +125,11 @@ tags = TagBlock(["intelligence", "review"])
 
 ### What to do if you're unsure
 
-If a rich-type node truly has minimal substance (a bare \`decision\` with no rationale, an \`event\` with no date), still emit a valid body — minimum is a Card with a CardHeader and one TextContent. Don't skip the body for required types.
+If a node has minimal substance (a casual mention, a one-word topic), the minimum valid body is a Card with a CardHeader. Don't skip the body — even a single-header Card is the right rendering for a thin node. Padding it with empty TextContent is worse than just the header.
 
 ### Final checklist (before emitting the diff)
 
-For each node in \`add_nodes\` of type \`decision\` / \`risk\` / \`metric\` / \`event\`: confirm \`body\` is populated. If you classified something as one of these four types you committed to providing a body — there is no "I'll skip it this time."
-
-For each node of any other type: confirm \`body\` is absent.
+For EVERY node in \`add_nodes\`: confirm \`body\` is populated. Every node. No exceptions. If you finalized any node without one, go back and add it before submitting.
 `;
 
 /**
@@ -578,7 +581,7 @@ ${OPENUI_LANG_NODE_BODY}
 
 ### Finalize-pass specific note
 
-If a rich-typed node already exists in the input graph without a \`body\`, fill it in by emitting an \`update_nodes\` entry with just \`{ id, body: "..." }\`. Don't re-emit unchanged fields. If a body already exists and is reasonable, leave it alone — don't churn good output.`;
+Don't churn good output. If an existing node already has a body, leave it alone — only emit \`update_nodes\` entries when something has genuinely changed (resolved status, merged with another node, etc.). New nodes you add still need bodies, per the rules above.`;
 
 export interface PromptInput {
 	currentGraphJson: string;

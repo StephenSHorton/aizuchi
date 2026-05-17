@@ -10,7 +10,7 @@ interface NodeBodyProps {
 }
 
 const BODY_WIDTH = 280;
-const BODY_MAX_HEIGHT = 220;
+const BODY_MAX_HEIGHT = 300;
 
 /**
  * AIZ-52 — DOM render of a single node's OpenUI Lang body, docked at the

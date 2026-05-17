@@ -8,35 +8,10 @@ import type {
 	NodeType,
 } from "./schemas";
 
-// AIZ-52 — only these node types are allowed to carry an OpenUI Lang
-// `body`. Bodies on other types are an over-emission by Gemma — silently
-// dropped here so the frontend doesn't try to render Card-shells for
-// every context/work_item node and crowd out the canvas.
-const RICH_BODY_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
-	"decision",
-	"risk",
-	"metric",
-	"event",
-]);
-
-function stripStrayBody<T extends { type?: NodeType; body?: string }>(
-	node: T,
-): T {
-	if (
-		node.body !== undefined &&
-		node.type !== undefined &&
-		!RICH_BODY_TYPES.has(node.type)
-	) {
-		const { body: _body, ...rest } = node;
-		return rest as T;
-	}
-	return node;
-}
-
 /**
- * AIZ-52 — string literal escape for OpenUI Lang DSL. Same shape as JSON
- * string literals (double-quoted, backslash escapes), but we serialize via
- * JSON.stringify which handles every edge case (quotes, newlines, unicode).
+ * AIZ-52 / AIZ-59 — string literal escape for OpenUI Lang DSL. Same shape
+ * as JSON string literals (double-quoted, backslash escapes); JSON.stringify
+ * handles every edge case (quotes, newlines, unicode).
  */
 function lit(s: string | undefined | null): string {
 	return JSON.stringify(s ?? "");
@@ -54,24 +29,7 @@ function severityVariant(
 	return "info";
 }
 
-/**
- * AIZ-52 — type-aware fallback body. Fires when Gemma classified a node as
- * a rich type but forgot to emit \`body\`. The model dropping a required
- * field is common in \`generateObject\` flows where Zod marks it optional;
- * we'd rather render a minimal-but-distinct card than fall back to a pill
- * that contradicts the user's "rich type = OpenUI body" model.
- *
- * Bodies are tailored per type so they don't all look identical:
- *   - risk → Callout, variant picked from likelihood/impact severity.
- *   - decision → CardHeader (the choice) + rationale + optional alternative.
- *   - metric → x-large-heavy value tile + target line + label header.
- *   - event → CardHeader title+subtitle (occurredAt as subtitle).
- *
- * Returns undefined when no plausible synthesis exists — caller leaves
- * \`body\` absent in that case (rare; the label + description fallback
- * should always work).
- */
-function synthesizeFallbackBody(node: {
+interface FallbackNode {
 	label: string;
 	type: NodeType;
 	description?: string;
@@ -82,8 +40,27 @@ function synthesizeFallbackBody(node: {
 	unit?: string;
 	occurredAt?: string;
 	alternative?: string;
-}): string | undefined {
+	dueDate?: string;
+	limit?: string;
+	prediction?: string;
+	tone?: string;
+	tags?: string[];
+	speaker?: string;
+}
+
+/**
+ * AIZ-59 — fallback body for any node Gemma added without one. The
+ * canvas no longer draws typed pills, so a missing body would leave a
+ * blank space; we synthesize a minimal-but-type-aware Card so every node
+ * has a render.
+ *
+ * Each branch is intentionally minimal — Gemma's job is to compose the
+ * rich version. The fallback exists for cases where the model dropped
+ * the field; we'd rather render a plain header than nothing.
+ */
+function synthesizeFallbackBody(node: FallbackNode): string {
 	const desc = node.description?.trim() || "";
+	const label = node.label;
 	switch (node.type) {
 		case "risk": {
 			const variant = severityVariant(node.likelihood, node.impact);
@@ -92,35 +69,34 @@ function synthesizeFallbackBody(node: {
 					? `${node.likelihood} likelihood / ${node.impact} impact`
 					: "Risk";
 			return [
-				"root = Card([callout])",
-				`callout = Callout(${lit(variant)}, ${lit(headline)}, ${lit(desc || node.label)})`,
+				"root = Card([head, callout])",
+				`head = CardHeader(${lit(label)})`,
+				`callout = Callout(${lit(variant)}, ${lit(headline)}, ${lit(desc || label)})`,
 			].join("\n");
 		}
 		case "metric": {
-			const lines = [
-				"root = Card([head, val])",
-				`head = CardHeader(${lit(node.label)})`,
-			];
 			const value = node.value
 				? node.unit
 					? `${node.value} ${node.unit}`
 					: node.value
-				: desc || node.label;
-			lines.push(`val = TextContent(${lit(value)}, "x-large-heavy")`);
+				: desc || label;
+			const lines = [
+				"root = Card([head, val])",
+				`head = CardHeader(${lit(label)})`,
+				`val = TextContent(${lit(value)}, "x-large-heavy")`,
+			];
 			if (node.target) {
-				const targetLine = `Target: ${node.target}${node.unit ? ` ${node.unit}` : ""}`;
 				lines[0] = "root = Card([head, val, sub])";
+				const targetLine = `Target: ${node.target}${node.unit ? ` ${node.unit}` : ""}`;
 				lines.push(`sub = TextContent(${lit(targetLine)}, "small")`);
 			}
 			return lines.join("\n");
 		}
 		case "event": {
 			const head = node.occurredAt
-				? `head = CardHeader(${lit(node.label)}, ${lit(node.occurredAt)})`
-				: `head = CardHeader(${lit(node.label)})`;
-			if (!desc) {
-				return ["root = Card([head])", head].join("\n");
-			}
+				? `head = CardHeader(${lit(label)}, ${lit(node.occurredAt)})`
+				: `head = CardHeader(${lit(label)})`;
+			if (!desc) return ["root = Card([head])", head].join("\n");
 			return [
 				"root = Card([head, body])",
 				head,
@@ -130,7 +106,7 @@ function synthesizeFallbackBody(node: {
 		case "decision": {
 			const lines = [
 				"root = Card([head, body])",
-				`head = CardHeader(${lit(node.label)})`,
+				`head = CardHeader(${lit(label)})`,
 				`body = TextContent(${lit(desc || "Decision made.")})`,
 			];
 			if (node.alternative) {
@@ -141,34 +117,100 @@ function synthesizeFallbackBody(node: {
 			}
 			return lines.join("\n");
 		}
-		default:
-			return undefined;
+		case "blocker":
+			return [
+				"root = Card([head, callout])",
+				`head = CardHeader(${lit(label)})`,
+				`callout = Callout("danger", "Blocker", ${lit(desc || label)})`,
+			].join("\n");
+		case "question":
+			return [
+				"root = Card([callout])",
+				`callout = Callout("info", "Open question", ${lit(desc || label)})`,
+			].join("\n");
+		case "assumption":
+			return [
+				"root = Card([callout])",
+				`callout = Callout("warning", "Assumption", ${lit(desc || label)})`,
+			].join("\n");
+		case "constraint": {
+			const headline = node.limit ? `Limit: ${node.limit}` : "Constraint";
+			return [
+				"root = Card([head, callout])",
+				`head = CardHeader(${lit(label)})`,
+				`callout = TextCallout("info", ${lit(headline)})`,
+			].join("\n");
+		}
+		case "hypothesis":
+			return [
+				"root = Card([head, body])",
+				`head = CardHeader(${lit(label)})`,
+				`body = TextCallout("info", ${lit(node.prediction || desc || "Hypothesis")})`,
+			].join("\n");
+		case "action_item": {
+			const head = node.dueDate
+				? `head = CardHeader(${lit(label)}, ${lit(`Due ${node.dueDate}`)})`
+				: `head = CardHeader(${lit(label)})`;
+			if (!desc) return ["root = Card([head])", head].join("\n");
+			return [
+				"root = Card([head, body])",
+				head,
+				`body = TextContent(${lit(desc)})`,
+			].join("\n");
+		}
+		case "sentiment": {
+			const variant =
+				node.tone &&
+				/frustrat|angry|upset|worried|anxious|stressed/i.test(node.tone)
+					? "warning"
+					: node.tone &&
+							/excit|aligned|confident|happy|optimist/i.test(node.tone)
+						? "success"
+						: "info";
+			const headline = node.tone ? node.tone : "Sentiment";
+			return [
+				"root = Card([callout])",
+				`callout = Callout(${lit(variant)}, ${lit(headline)}, ${lit(desc || label)})`,
+			].join("\n");
+		}
+		case "person": {
+			const head = node.speaker
+				? `head = CardHeader(${lit(label)}, ${lit(node.speaker)})`
+				: `head = CardHeader(${lit(label)})`;
+			return ["root = Card([head])", head].join("\n");
+		}
+		case "topic":
+		case "work_item":
+		case "context":
+		case "artifact":
+		default: {
+			const lines = ["root = Card([head])", `head = CardHeader(${lit(label)})`];
+			if (desc) {
+				lines[0] = "root = Card([head, body])";
+				lines.push(`body = TextContent(${lit(desc)})`);
+			}
+			if (node.tags && node.tags.length > 0) {
+				const last = lines[0].slice(0, -2);
+				lines[0] = `${last}, tags])`;
+				lines.push(
+					`tags = TagBlock([${node.tags.map((t) => lit(t)).join(", ")}])`,
+				);
+			}
+			return lines.join("\n");
+		}
 	}
 }
 
 function fillMissingBody<T extends { type?: NodeType; body?: string }>(
 	node: T,
 ): T {
-	if (
-		node.type !== undefined &&
-		RICH_BODY_TYPES.has(node.type) &&
-		(node.body === undefined || node.body.trim().length === 0)
-	) {
-		// Need label at minimum to synthesize. NodeUpdate may omit label;
-		// in that case skip — we don't have enough to invent.
-		const candidate = node as T & {
-			label?: string;
-			description?: string;
-			likelihood?: string;
-			impact?: string;
-			value?: string;
-			target?: string;
-			unit?: string;
-			occurredAt?: string;
-			alternative?: string;
-		};
-		if (!candidate.label) return node;
-		const body = synthesizeFallbackBody({
+	if (node.type === undefined) return node;
+	if (node.body !== undefined && node.body.trim().length > 0) return node;
+	const candidate = node as T & FallbackNode;
+	if (!candidate.label) return node;
+	return {
+		...node,
+		body: synthesizeFallbackBody({
 			label: candidate.label,
 			type: node.type,
 			description: candidate.description,
@@ -179,10 +221,14 @@ function fillMissingBody<T extends { type?: NodeType; body?: string }>(
 			unit: candidate.unit,
 			occurredAt: candidate.occurredAt,
 			alternative: candidate.alternative,
-		});
-		if (body) return { ...node, body };
-	}
-	return node;
+			dueDate: candidate.dueDate,
+			limit: candidate.limit,
+			prediction: candidate.prediction,
+			tone: candidate.tone,
+			tags: candidate.tags,
+			speaker: candidate.speaker,
+		}),
+	};
 }
 
 const SPECIFIC_RELATIONS: ReadonlySet<EdgeRelation> = new Set([
@@ -488,13 +534,11 @@ export function normalizeDiff(
 	return {
 		diff: {
 			...diff,
-			add_nodes: [...filteredAddNodes, ...addedPersonNodes]
-				.map(stripStrayBody)
-				.map(fillMissingBody),
+			add_nodes: [...filteredAddNodes, ...addedPersonNodes].map(
+				fillMissingBody,
+			),
 			add_edges: filteredEdges,
-			update_nodes: filteredUpdateNodes
-				.map(stripStrayBody)
-				.map(fillMissingBody),
+			update_nodes: filteredUpdateNodes.map(fillMissingBody),
 			merge_nodes: filteredMerges,
 			remove_nodes: removeNodes,
 			remove_edges: removeEdges,

@@ -30,14 +30,15 @@ import type { EdgeRelation, Graph } from "@/lib/aizuchi/schemas";
  * far from where they belong) before letting d3 settle them in.
  */
 
-// AIZ-52 — collision sizing is tuned for the larger of (typed pill,
-// OpenUI body). Bodies are capped at 220px tall in NodeBody.tsx; the
-// collision radius below uses 220 so DOM bodies don't visually overlap
-// at rest. Plain pills (~56px tall) get extra breathing room as a
-// side effect — acceptable for now.
-const CARD_W = 384;
-const CARD_H = 220;
-const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 24;
+// AIZ-52 / AIZ-59 — every node is now an OpenUI body (DOM card). Sizes
+// are tuned for the body's DOM footprint (280px wide, capped at 300px
+// tall in NodeBody.tsx) plus generous padding so the force sim spreads
+// cards out instead of crowding them. The horizontal value is intentionally
+// wider than the body because two cards adjacent feel tight when separated
+// only by their own widths.
+const CARD_W = 480;
+const CARD_H = 340;
+const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 32;
 
 /**
  * AIZ-12 — BFS-radial layout. Pick the most-connected node as the hub
