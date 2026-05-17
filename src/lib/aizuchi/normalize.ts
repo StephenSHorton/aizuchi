@@ -33,6 +33,158 @@ function stripStrayBody<T extends { type?: NodeType; body?: string }>(
 	return node;
 }
 
+/**
+ * AIZ-52 — string literal escape for OpenUI Lang DSL. Same shape as JSON
+ * string literals (double-quoted, backslash escapes), but we serialize via
+ * JSON.stringify which handles every edge case (quotes, newlines, unicode).
+ */
+function lit(s: string | undefined | null): string {
+	return JSON.stringify(s ?? "");
+}
+
+function severityVariant(
+	likelihood: string | undefined,
+	impact: string | undefined,
+): string {
+	const score = (s?: string) =>
+		s === "high" ? 2 : s === "medium" ? 1 : s === "low" ? 0 : 0.5;
+	const total = score(likelihood) + score(impact);
+	if (total >= 3) return "danger"; // both high, or high+medium
+	if (total >= 1.5) return "warning"; // at least one medium-or-up
+	return "info";
+}
+
+/**
+ * AIZ-52 — type-aware fallback body. Fires when Gemma classified a node as
+ * a rich type but forgot to emit \`body\`. The model dropping a required
+ * field is common in \`generateObject\` flows where Zod marks it optional;
+ * we'd rather render a minimal-but-distinct card than fall back to a pill
+ * that contradicts the user's "rich type = OpenUI body" model.
+ *
+ * Bodies are tailored per type so they don't all look identical:
+ *   - risk → Callout, variant picked from likelihood/impact severity.
+ *   - decision → CardHeader (the choice) + rationale + optional alternative.
+ *   - metric → x-large-heavy value tile + target line + label header.
+ *   - event → CardHeader title+subtitle (occurredAt as subtitle).
+ *
+ * Returns undefined when no plausible synthesis exists — caller leaves
+ * \`body\` absent in that case (rare; the label + description fallback
+ * should always work).
+ */
+function synthesizeFallbackBody(node: {
+	label: string;
+	type: NodeType;
+	description?: string;
+	likelihood?: string;
+	impact?: string;
+	value?: string;
+	target?: string;
+	unit?: string;
+	occurredAt?: string;
+	alternative?: string;
+}): string | undefined {
+	const desc = node.description?.trim() || "";
+	switch (node.type) {
+		case "risk": {
+			const variant = severityVariant(node.likelihood, node.impact);
+			const headline =
+				node.likelihood && node.impact
+					? `${node.likelihood} likelihood / ${node.impact} impact`
+					: "Risk";
+			return [
+				"root = Card([callout])",
+				`callout = Callout(${lit(variant)}, ${lit(headline)}, ${lit(desc || node.label)})`,
+			].join("\n");
+		}
+		case "metric": {
+			const lines = [
+				"root = Card([head, val])",
+				`head = CardHeader(${lit(node.label)})`,
+			];
+			const value = node.value
+				? node.unit
+					? `${node.value} ${node.unit}`
+					: node.value
+				: desc || node.label;
+			lines.push(`val = TextContent(${lit(value)}, "x-large-heavy")`);
+			if (node.target) {
+				const targetLine = `Target: ${node.target}${node.unit ? ` ${node.unit}` : ""}`;
+				lines[0] = "root = Card([head, val, sub])";
+				lines.push(`sub = TextContent(${lit(targetLine)}, "small")`);
+			}
+			return lines.join("\n");
+		}
+		case "event": {
+			const head = node.occurredAt
+				? `head = CardHeader(${lit(node.label)}, ${lit(node.occurredAt)})`
+				: `head = CardHeader(${lit(node.label)})`;
+			if (!desc) {
+				return ["root = Card([head])", head].join("\n");
+			}
+			return [
+				"root = Card([head, body])",
+				head,
+				`body = TextContent(${lit(desc)})`,
+			].join("\n");
+		}
+		case "decision": {
+			const lines = [
+				"root = Card([head, body])",
+				`head = CardHeader(${lit(node.label)})`,
+				`body = TextContent(${lit(desc || "Decision made.")})`,
+			];
+			if (node.alternative) {
+				lines[0] = "root = Card([head, body, alt])";
+				lines.push(
+					`alt = TextCallout("info", ${lit(`Alternative weighed: ${node.alternative}.`)})`,
+				);
+			}
+			return lines.join("\n");
+		}
+		default:
+			return undefined;
+	}
+}
+
+function fillMissingBody<T extends { type?: NodeType; body?: string }>(
+	node: T,
+): T {
+	if (
+		node.type !== undefined &&
+		RICH_BODY_TYPES.has(node.type) &&
+		(node.body === undefined || node.body.trim().length === 0)
+	) {
+		// Need label at minimum to synthesize. NodeUpdate may omit label;
+		// in that case skip — we don't have enough to invent.
+		const candidate = node as T & {
+			label?: string;
+			description?: string;
+			likelihood?: string;
+			impact?: string;
+			value?: string;
+			target?: string;
+			unit?: string;
+			occurredAt?: string;
+			alternative?: string;
+		};
+		if (!candidate.label) return node;
+		const body = synthesizeFallbackBody({
+			label: candidate.label,
+			type: node.type,
+			description: candidate.description,
+			likelihood: candidate.likelihood,
+			impact: candidate.impact,
+			value: candidate.value,
+			target: candidate.target,
+			unit: candidate.unit,
+			occurredAt: candidate.occurredAt,
+			alternative: candidate.alternative,
+		});
+		if (body) return { ...node, body };
+	}
+	return node;
+}
+
 const SPECIFIC_RELATIONS: ReadonlySet<EdgeRelation> = new Set([
 	"owns",
 	"depends_on",
@@ -336,9 +488,13 @@ export function normalizeDiff(
 	return {
 		diff: {
 			...diff,
-			add_nodes: [...filteredAddNodes, ...addedPersonNodes].map(stripStrayBody),
+			add_nodes: [...filteredAddNodes, ...addedPersonNodes]
+				.map(stripStrayBody)
+				.map(fillMissingBody),
 			add_edges: filteredEdges,
-			update_nodes: filteredUpdateNodes.map(stripStrayBody),
+			update_nodes: filteredUpdateNodes
+				.map(stripStrayBody)
+				.map(fillMissingBody),
 			merge_nodes: filteredMerges,
 			remove_nodes: removeNodes,
 			remove_edges: removeEdges,

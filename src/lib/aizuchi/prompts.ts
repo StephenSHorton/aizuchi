@@ -16,16 +16,13 @@ import type { AIThought } from "./schemas";
  * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
  * "no JSON / no code fences", "single root", "no invented components."
  */
-const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — ONLY for rich types
+const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — REQUIRED on rich types
 
-Emit a \`body\` field containing OpenUI Lang DSL **only for these four node types**:
+Every \`decision\`, \`risk\`, \`metric\`, or \`event\` node MUST include a \`body\` field containing OpenUI Lang DSL. This is non-negotiable — these node types do not render correctly on the canvas without a body. Treat the \`body\` field as if it were required by the schema even though Zod marks it optional.
 
-- **decision** — required
-- **risk** — required
-- **metric** — required
-- **event** — required
+Before you finalize \`add_nodes\` for the response, scan every node you've added. For each \`decision\` / \`risk\` / \`metric\` / \`event\`: if \`body\` is missing or empty, fill it in following the patterns below.
 
-**For every other type — \`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\` — DO NOT emit a body. Leave the field absent.** The canvas renders these as a typed pill, which is the right visual for them. Emitting a body on a non-rich type is treated as a bug and discarded downstream.
+For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\`), omit \`body\`. The canvas renders those as the existing typed pill.
 
 ### Hard rules
 
@@ -125,9 +122,11 @@ tags = TagBlock(["intelligence", "review"])
 
 If a rich-type node truly has minimal substance (a bare \`decision\` with no rationale, an \`event\` with no date), still emit a valid body — minimum is a Card with a CardHeader and one TextContent. Don't skip the body for required types.
 
-### Reminder
+### Final checklist (before emitting the diff)
 
-Body required: decision, risk, metric, event. **Body omitted: everything else.** Bodies on non-rich types are discarded.
+For each node in \`add_nodes\` of type \`decision\` / \`risk\` / \`metric\` / \`event\`: confirm \`body\` is populated. If you classified something as one of these four types you committed to providing a body — there is no "I'll skip it this time."
+
+For each node of any other type: confirm \`body\` is absent.
 `;
 
 /**
