@@ -1,0 +1,9 @@
+Travis: Quick standup. Migration cutover is still Friday night. Mira, are you blocked?
+Mira: No, but I want a rollback plan written down before Friday. If we lose writes we need a path back.
+Travis: Yeah, the runbook in Notion covers it, I'll send the link.
+Priya: While we're here — the badge UX overflow keeps coming up. Who actually owns that?
+Alex: I think nobody right now. I can pick it up after the push fix lands.
+Priya: Okay, parked. Travis, what's blocking the migration?
+Travis: Honestly the staging pool issues. We can't even get a clean dry-run to complete.
+Priya: Right, and that's pgbouncer-shaped, not a real prod risk?
+Travis: Correct. We're assuming low traffic Friday night, ten pm to two am window.

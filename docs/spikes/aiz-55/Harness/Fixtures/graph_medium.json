@@ -1,0 +1,249 @@
+{
+  "nodes": [
+    {
+      "id": "travis_chen",
+      "label": "Travis Chen",
+      "type": "person"
+    },
+    {
+      "id": "priya_singh",
+      "label": "Priya Singh",
+      "type": "person"
+    },
+    {
+      "id": "alex_park",
+      "label": "Alex Park",
+      "type": "person"
+    },
+    {
+      "id": "mira_rao",
+      "label": "Mira Rao",
+      "type": "person"
+    },
+    {
+      "id": "postgres_migration",
+      "label": "Postgres migration",
+      "type": "work_item",
+      "description": "Migrate the primary order-service database from MySQL 5.7 to Postgres 16."
+    },
+    {
+      "id": "ios_push_fix",
+      "label": "iOS push notification fix",
+      "type": "work_item",
+      "description": "Fix silent-push regression that broke on iOS 26 due to APS payload validation."
+    },
+    {
+      "id": "badge_ux",
+      "label": "Badge UX redesign",
+      "type": "work_item",
+      "description": "Rework the unread-count badge so it doesn't overflow at >99 events."
+    },
+    {
+      "id": "staging_db_outage",
+      "label": "Staging DB outage",
+      "type": "blocker",
+      "description": "Connection pool exhaustion on staging is blocking the migration dry-run."
+    },
+    {
+      "id": "p95_latency_target",
+      "label": "p95 latency target",
+      "type": "metric",
+      "value": "180ms",
+      "target": "200ms",
+      "unit": "ms"
+    },
+    {
+      "id": "migration_friday",
+      "label": "Migration cutover Friday",
+      "type": "event",
+      "occurredAt": "2026-05-22"
+    },
+    {
+      "id": "use_pgbouncer",
+      "label": "Use pgbouncer for pooling",
+      "type": "decision",
+      "alternative": "RDS Proxy",
+      "description": "Chose pgbouncer over RDS Proxy because of cost and Tahoe compatibility."
+    },
+    {
+      "id": "review_pr_421",
+      "label": "Review PR #421",
+      "type": "action_item",
+      "dueDate": "end of week",
+      "description": "Travis to review the pgbouncer config PR before the Friday cutover."
+    },
+    {
+      "id": "rollback_plan_q",
+      "label": "Do we have a rollback plan?",
+      "type": "question",
+      "description": "Open question: if cutover fails Friday, what's the rollback window?"
+    },
+    {
+      "id": "no_pii_logs",
+      "label": "No PII in logs",
+      "type": "constraint",
+      "limit": "no PII in logs",
+      "description": "Security policy: no customer PII may appear in service logs."
+    },
+    {
+      "id": "data_loss_risk",
+      "label": "Data-loss risk during cutover",
+      "type": "risk",
+      "likelihood": "medium",
+      "impact": "high",
+      "description": "If replication lag exceeds 30s at cutover, in-flight writes may be lost."
+    }
+  ],
+  "edges": [
+    {
+      "id": "travis_chen-owns-postgres_migration",
+      "from": "travis_chen",
+      "to": "postgres_migration",
+      "relation": "owns"
+    },
+    {
+      "id": "priya_singh-owns-badge_ux",
+      "from": "priya_singh",
+      "to": "badge_ux",
+      "relation": "owns"
+    },
+    {
+      "id": "alex_park-owns-ios_push_fix",
+      "from": "alex_park",
+      "to": "ios_push_fix",
+      "relation": "owns"
+    },
+    {
+      "id": "staging_db_outage-blocks-postgres_migration",
+      "from": "staging_db_outage",
+      "to": "postgres_migration",
+      "relation": "blocks"
+    },
+    {
+      "id": "postgres_migration-depends_on-use_pgbouncer",
+      "from": "postgres_migration",
+      "to": "use_pgbouncer",
+      "relation": "depends_on"
+    },
+    {
+      "id": "use_pgbouncer-decides-postgres_migration",
+      "from": "use_pgbouncer",
+      "to": "postgres_migration",
+      "relation": "decides"
+    },
+    {
+      "id": "travis_chen-assigned_to-review_pr_421",
+      "from": "travis_chen",
+      "to": "review_pr_421",
+      "relation": "assigned_to"
+    },
+    {
+      "id": "review_pr_421-resolves-rollback_plan_q",
+      "from": "review_pr_421",
+      "to": "rollback_plan_q",
+      "relation": "resolves"
+    },
+    {
+      "id": "data_loss_risk-causes-postgres_migration",
+      "from": "data_loss_risk",
+      "to": "postgres_migration",
+      "relation": "causes"
+    },
+    {
+      "id": "ios_push_fix-related_to-alex_park",
+      "from": "ios_push_fix",
+      "to": "alex_park",
+      "relation": "related_to"
+    },
+    {
+      "id": "badge_ux-related_to-use_pgbouncer",
+      "from": "badge_ux",
+      "to": "use_pgbouncer",
+      "relation": "related_to"
+    },
+    {
+      "id": "travis_chen-related_to-priya_singh",
+      "from": "travis_chen",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "no_pii_logs-related_to-p95_latency_target",
+      "from": "no_pii_logs",
+      "to": "p95_latency_target",
+      "relation": "related_to"
+    },
+    {
+      "id": "priya_singh-related_to-ios_push_fix",
+      "from": "priya_singh",
+      "to": "ios_push_fix",
+      "relation": "related_to"
+    },
+    {
+      "id": "migration_friday-related_to-travis_chen",
+      "from": "migration_friday",
+      "to": "travis_chen",
+      "relation": "related_to"
+    },
+    {
+      "id": "data_loss_risk-related_to-p95_latency_target",
+      "from": "data_loss_risk",
+      "to": "p95_latency_target",
+      "relation": "related_to"
+    },
+    {
+      "id": "mira_rao-related_to-travis_chen",
+      "from": "mira_rao",
+      "to": "travis_chen",
+      "relation": "related_to"
+    },
+    {
+      "id": "priya_singh-related_to-badge_ux",
+      "from": "priya_singh",
+      "to": "badge_ux",
+      "relation": "related_to"
+    },
+    {
+      "id": "badge_ux-related_to-priya_singh",
+      "from": "badge_ux",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "mira_rao-related_to-priya_singh",
+      "from": "mira_rao",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "p95_latency_target-related_to-badge_ux",
+      "from": "p95_latency_target",
+      "to": "badge_ux",
+      "relation": "related_to"
+    },
+    {
+      "id": "travis_chen-related_to-no_pii_logs",
+      "from": "travis_chen",
+      "to": "no_pii_logs",
+      "relation": "related_to"
+    },
+    {
+      "id": "migration_friday-related_to-priya_singh",
+      "from": "migration_friday",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "mira_rao-related_to-use_pgbouncer",
+      "from": "mira_rao",
+      "to": "use_pgbouncer",
+      "relation": "related_to"
+    },
+    {
+      "id": "use_pgbouncer-related_to-migration_friday",
+      "from": "use_pgbouncer",
+      "to": "migration_friday",
+      "relation": "related_to"
+    }
+  ]
+}
