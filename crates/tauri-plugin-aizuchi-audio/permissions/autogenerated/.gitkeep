@@ -1,0 +1,5 @@
+# tauri-plugin's build script writes the per-command allow/deny TOMLs
+# (e.g. allow-start-capture.toml, deny-start-capture.toml) into this
+# directory at build time. They are generated from the COMMANDS array
+# in build.rs. Keep this directory in git so the build script has a
+# place to write.
