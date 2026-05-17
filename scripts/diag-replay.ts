@@ -21,10 +21,10 @@ import { batchTranscript, formatChunkBatch } from "../src/lib/aizuchi/batcher";
 import { finalizeGraph, mutateGraph } from "../src/lib/aizuchi/graph-mutation";
 import type { ExtractionMode } from "../src/lib/aizuchi/persistence";
 import {
-	applyDiff,
-	emptyGraph,
 	type AIThought,
 	type AIThoughtRecord,
+	applyDiff,
+	emptyGraph,
 	type Graph,
 	mergeThoughts,
 	type TranscriptChunk,
@@ -37,7 +37,9 @@ const RECENT_TRANSCRIPT_WINDOW_MS = 60_000;
 
 const [, , inPath, outPathArg] = process.argv;
 if (!inPath) {
-	console.error("usage: bun run scripts/diag-replay.ts <meeting-json-path> [out]");
+	console.error(
+		"usage: bun run scripts/diag-replay.ts <meeting-json-path> [out]",
+	);
 	process.exit(1);
 }
 
@@ -78,7 +80,8 @@ const passes: Array<{
 
 function recentTranscriptText(chunks: TranscriptChunk[]): string {
 	if (chunks.length === 0) return "";
-	const cutoff = (chunks[chunks.length - 1]?.endMs ?? 0) - RECENT_TRANSCRIPT_WINDOW_MS;
+	const cutoff =
+		(chunks[chunks.length - 1]?.endMs ?? 0) - RECENT_TRANSCRIPT_WINDOW_MS;
 	const recent = chunks.filter((c) => c.endMs >= cutoff);
 	return recent.map((c) => `${c.speaker}: ${c.text}`).join("\n");
 }
@@ -102,7 +105,9 @@ for (const batch of batches) {
 	const result = await mutateGraph(graph, chunkText, {
 		extractionMode: mode,
 		recentTranscript: recent,
-		previousThoughts: thoughts.map(({ createdAt: _c, updatedAt: _u, ...t }) => t as AIThought),
+		previousThoughts: thoughts.map(
+			({ createdAt: _c, updatedAt: _u, ...t }) => t as AIThought,
+		),
 	});
 
 	graph = applyDiff(graph, result.diff);
@@ -132,7 +137,9 @@ for (const batch of batches) {
 console.error("\n[finalize] running end-of-transcript review...");
 const finalizeResult = await finalizeGraph(graph, transcript, {
 	extractionMode: mode,
-	previousThoughts: thoughts.map(({ createdAt: _c, updatedAt: _u, ...t }) => t as AIThought),
+	previousThoughts: thoughts.map(
+		({ createdAt: _c, updatedAt: _u, ...t }) => t as AIThought,
+	),
 });
 
 graph = applyDiff(graph, finalizeResult.diff);
