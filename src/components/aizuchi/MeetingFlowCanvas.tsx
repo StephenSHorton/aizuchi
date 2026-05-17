@@ -99,6 +99,7 @@ type ObservationFlowNode = RFNode<ObservationNodeData, "observation">;
 
 interface ObservationEdgeData extends Record<string, unknown> {
 	relation: EdgeRelation;
+	description?: string;
 	dimmed: boolean;
 	inNeighborhood: boolean;
 }
@@ -226,7 +227,7 @@ function ObservationEdge({
 	if (!sourceNode || !targetNode || !data) return null;
 
 	const params = getEdgeParams(sourceNode, targetNode);
-	const [path] = getBezierPath({
+	const [path, labelX, labelY] = getBezierPath({
 		sourceX: params.sx,
 		sourceY: params.sy,
 		sourcePosition: params.sourcePos,
@@ -246,16 +247,42 @@ function ObservationEdge({
 	const opacity = dimmed ? 0.15 : inN ? 1 : 0.65;
 
 	return (
-		<path
-			id={id}
-			d={path}
-			stroke={style.color}
-			strokeWidth={strokeWidth}
-			strokeOpacity={opacity}
-			strokeDasharray={style.dashed ? "6 5" : undefined}
-			fill="none"
-			className="react-flow__edge-path"
-		/>
+		<g>
+			<path
+				id={id}
+				d={path}
+				stroke={style.color}
+				strokeWidth={strokeWidth}
+				strokeOpacity={opacity}
+				strokeDasharray={style.dashed ? "6 5" : undefined}
+				fill="none"
+				className="react-flow__edge-path"
+			>
+				{data.description ? <title>{data.description}</title> : null}
+			</path>
+			{!dimmed ? (
+				<text
+					x={labelX}
+					y={labelY}
+					textAnchor="middle"
+					dominantBaseline="central"
+					fill={style.color}
+					fillOpacity={opacity}
+					className="pointer-events-none select-none [paint-order:stroke] stroke-background"
+					style={{
+						fontSize: 10,
+						fontFamily:
+							"ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+						fontWeight: 500,
+						strokeWidth: 4,
+						strokeLinejoin: "round",
+					}}
+				>
+					{data.relation.replaceAll("_", " ")}
+					{data.description ? <title>{data.description}</title> : null}
+				</text>
+			) : null}
+		</g>
 	);
 }
 
@@ -376,6 +403,7 @@ function MeetingFlowInner({
 					type: "observation",
 					data: {
 						relation: e.relation,
+						description: e.description,
 						dimmed: !!neighborhood && !neighborhood.edgeIds.has(e.id),
 						inNeighborhood: neighborhood?.edgeIds.has(e.id) ?? false,
 					},
