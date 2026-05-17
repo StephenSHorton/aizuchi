@@ -1,0 +1,54 @@
+====================================================================================================
+AIZ-55 — Foundation Models GraphDiff token budget
+====================================================================================================
+Context window (FM iOS 26):   4096 tokens (shared input + output)
+Output budget floor:          1000 tokens reserved for GraphDiff response
+Reference GraphDiff response: 444 tokens (2 add_nodes, 3 add_edges,
+                              1 update_nodes, 1 note — a 'meaningful' streaming pass)
+Tokenizer proxy:              tiktoken cl100k_base (Apple FM uses an unpublished BPE;
+                              docs cite ~3-4 chars/token for EN, which matches cl100k)
+
+Fixed prompt-component costs (sanity check):
+  SYSTEM_PROMPT_ATTRIBUTION: 3038 tokens (12020 chars)
+  SYSTEM_PROMPT_SUBSTANCE:   2681 tokens (10871 chars)
+  SCHEMA_BLOB (estimate):    621 tokens
+  PREVIOUS_THOUGHTS (3):     191 tokens
+  RECENT_TRANSCRIPT (60s):   184 tokens
+  NEW_CHUNK (30s):           124 tokens
+
+----------------------------------------------------------------------------------------------------
+Scenario A: SYSTEM_PROMPT_ATTRIBUTION + schema injected (FM default)
+----------------------------------------------------------------------------------------------------
+Small (5 nodes)                  nodes=5   edges=8   sys=3038  schema=621  graph=563   thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=4841  REM=-745  floor≥1000:FAIL ref-diff-fits:FAIL
+Medium (15 nodes)                nodes=15  edges=25  sys=3038  schema=621  graph=1932  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=6210  REM=-2114 floor≥1000:FAIL ref-diff-fits:FAIL
+Large (30 nodes)                 nodes=30  edges=51  sys=3038  schema=621  graph=3760  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=8038  REM=-3942 floor≥1000:FAIL ref-diff-fits:FAIL
+
+----------------------------------------------------------------------------------------------------
+Scenario B: SYSTEM_PROMPT_ATTRIBUTION + schema NOT injected (includeSchemaInPrompt: false)
+           — assumes the @Generable macro provides constrained decoding without echoing schema
+----------------------------------------------------------------------------------------------------
+Small (5 nodes)                  nodes=5   edges=8   sys=3038  schema=0    graph=563   thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=4220  REM=-124  floor≥1000:FAIL ref-diff-fits:FAIL
+Medium (15 nodes)                nodes=15  edges=25  sys=3038  schema=0    graph=1932  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=5589  REM=-1493 floor≥1000:FAIL ref-diff-fits:FAIL
+Large (30 nodes)                 nodes=30  edges=51  sys=3038  schema=0    graph=3760  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=7417  REM=-3321 floor≥1000:FAIL ref-diff-fits:FAIL
+
+----------------------------------------------------------------------------------------------------
+Scenario C: trimmed system prompt (worked examples removed) + schema NOT injected
+           — what an FM-port-specific system prompt would look like
+----------------------------------------------------------------------------------------------------
+  Trimmed attribution: 2423 tokens (was 3038)
+  Trimmed substance:   2225 tokens (was 2681)
+Small (5 nodes)                  nodes=5   edges=8   sys=2423  schema=0    graph=563   thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=3605  REM=491   floor≥1000:FAIL ref-diff-fits:PASS
+Medium (15 nodes)                nodes=15  edges=25  sys=2423  schema=0    graph=1932  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=4974  REM=-878  floor≥1000:FAIL ref-diff-fits:FAIL
+Large (30 nodes)                 nodes=30  edges=51  sys=2423  schema=0    graph=3760  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=6802  REM=-2706 floor≥1000:FAIL ref-diff-fits:FAIL
+
+----------------------------------------------------------------------------------------------------
+Scenario D: aggressive eviction — keep last-touched 8 nodes + 1-hop neighbors
+           on the LARGE (30-node) graph, with trimmed system prompt + no schema
+----------------------------------------------------------------------------------------------------
+Evicted (17 of 30)               nodes=17  edges=23  sys=2423  schema=0    graph=1824  thoughts=191  recent=184  chunk=124  scaffold=120  TOTAL_IN=4866  REM=-770  floor≥1000:FAIL ref-diff-fits:FAIL
+
+====================================================================================================
+Bottom line
+====================================================================================================
+Even the small (5-node) graph does not leave ≥1000 output tokens
+  with the current system prompt as-is.

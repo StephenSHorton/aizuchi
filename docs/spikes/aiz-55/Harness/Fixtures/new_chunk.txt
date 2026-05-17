@@ -1,0 +1,5 @@
+Travis: Okay so we hit the staging DB outage again last night, the pool exhausted around 2am.
+Priya: That's the third time this week. Are we sure pgbouncer is going to fix this?
+Travis: I think so. The hypothesis is connection count drops from two thousand to about two hundred against the primary. I'll merge the config PR today.
+Alex: Cool. Unrelated — the iOS silent-push fix is ready for review, I want to ship it behind a feature flag.
+Priya: Approved. Let's ramp five, twenty-five, one hundred over the week.
