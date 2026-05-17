@@ -150,6 +150,17 @@ export const Node = z.object({
 		.describe(
 			"For `decision` nodes — the rejected option, when one was explicitly weighed and dropped ('chose Postgres over MySQL' → alternative: 'MySQL').",
 		),
+	// AIZ-52 — Gemma-generated OpenUI Lang body for "rich" node types
+	// (decision / risk / metric / event). Rendered in DOM over the node's
+	// canvas position. When absent, the node renders as the classic typed
+	// pill. See SYSTEM_PROMPT_SUBSTANCE / SYSTEM_PROMPT_ATTRIBUTION for the
+	// emission rules.
+	body: z
+		.string()
+		.optional()
+		.describe(
+			"OpenUI Lang DSL describing how to render this node. Required for rich types (decision, risk, metric, event). Omit for other types. See OPENUI_LANG_NODE_BODY rules in the system prompt.",
+		),
 });
 export type Node = z.infer<typeof Node>;
 
@@ -190,6 +201,7 @@ export const NodeUpdate = z.object({
 	dueDate: z.string().optional(),
 	tone: z.string().optional(),
 	alternative: z.string().optional(),
+	body: z.string().optional(),
 });
 export type NodeUpdate = z.infer<typeof NodeUpdate>;
 

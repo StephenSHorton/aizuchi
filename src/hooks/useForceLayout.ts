@@ -30,11 +30,15 @@ import type { EdgeRelation, Graph } from "@/lib/aizuchi/schemas";
  * far from where they belong) before letting d3 settle them in.
  */
 
-const CARD_W = 384;
-const CARD_H = 160;
-// Collision radius — half the card diagonal plus padding so cards
-// never visually overlap at rest.
-const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 24;
+// AIZ-52 / AIZ-59 — every node is now an OpenUI body (DOM card). Sizes
+// are tuned for the body's DOM footprint (280px wide, capped at 300px
+// tall in NodeBody.tsx) plus generous padding so the force sim spreads
+// cards out instead of crowding them. The horizontal value is intentionally
+// wider than the body because two cards adjacent feel tight when separated
+// only by their own widths.
+const CARD_W = 480;
+const CARD_H = 340;
+const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 32;
 
 /**
  * AIZ-12 — BFS-radial layout. Pick the most-connected node as the hub
@@ -46,7 +50,14 @@ const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 24;
  * the "trees with branches" pattern the user asked for: structure
  * grows outward from the conversation's actual gravity.
  */
-const RING_SPACING = 380;
+// AIZ-52 — bumped from 380 → 600 along with the all-nodes-OpenUI move.
+// With every node now rendering as a Card (rather than typed pill),
+// ring 1 fills up faster — 7+ first-degree neighbors at radius 380
+// have only ~50° of angular space each, which is less than the new
+// collision diameter. Doubling the ring radius gives the BFS-radial
+// layout enough room to fit several cards on a single ring without
+// over-pulling them into collide-conflict.
+const RING_SPACING = 600;
 const DISCONNECTED_RADIUS_FALLBACK = 3000;
 // Focus-mode "buffer zone" radius around world (0,0). Dimmed/pinned nodes
 // inside this radius get nudged outward along their current angle so they
@@ -423,7 +434,7 @@ export function useForceLayout(
 					},
 					0,
 					0,
-				).strength((d) => (bfsDist.has(d.id) ? 0.6 : 0.05));
+				).strength((d) => (bfsDist.has(d.id) ? 0.4 : 0.05));
 
 		// Alpha bump magnitude. Focus enter/leave gets a noticeably higher
 		// kick so the neighborhood actually flicks; ordinary graph mutations

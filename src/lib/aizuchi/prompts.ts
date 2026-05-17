@@ -2,6 +2,137 @@ import type { ExtractionMode } from "./persistence";
 import type { AIThought } from "./schemas";
 
 /**
+ * AIZ-52 / AIZ-59 — OpenUI Lang body emission rules. Appended to both the
+ * attribution and substance system prompts. Every node Gemma adds carries
+ * an OpenUI Lang `body` that the frontend renders via `<Renderer>`. No
+ * "type-based pills" any more — the entire mind-map is composed by Gemma.
+ *
+ * Curated to a small component subset (Card / TextContent / CardHeader /
+ * Callout / TextCallout / TagBlock / Stack / LineChart / Series) so
+ * Gemma 4 8B has a tight surface to track — the full openuiChatLibrary
+ * prompt is ~15 KB and would dominate the extraction context.
+ *
+ * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
+ * "no JSON / no code fences", "single root", "no invented components."
+ */
+const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — REQUIRED on every node you add
+
+Every node you add MUST include a \`body\` field containing OpenUI Lang DSL. This is non-negotiable — without a body, the node has no visual on the canvas. Treat \`body\` as if Zod required it (it's marked optional only so older snapshots remain valid).
+
+You have full creative freedom over what the body looks like. Pick the components that best fit the observation. A risk might be a single \`Callout("danger", ...)\`. A decision might be a header + rationale + alternative. A metric might be an x-large-heavy value tile, or a LineChart if there's a series. A casual topic might be just a header. There are no required templates per type — compose what fits.
+
+### Composition latitude — sometimes one rich node beats three thin ones
+
+The graph encodes RELATIONSHIPS between distinct things. A single node's BODY encodes the richness WITHIN one observation. When a chunk produces material that's a single coherent thought (a decision with rationale + alternatives + a related risk), you can express that as one Card with multiple inner Callouts and TextContents — instead of fragmenting into one \`decision\` + one \`risk\` + one \`context\` linked by edges. Use your judgement: graph-shaped material (many distinct things linked) → many nodes; observation-shaped material (one thing with depth) → one rich body.
+
+When you do fragment into many nodes, keep their bodies appropriate: a casual \`mentions\`-edge target doesn't need a Callout, just a small header.
+
+### Hard rules
+
+- The \`body\` value is a STRING containing raw OpenUI Lang DSL. Not JSON. Not wrapped in markdown code fences. Not commentary.
+- Use variable-assignment syntax: \`root = ...\` then helper vars on their own lines.
+- Emit a single \`root = ...\` definition per body. No duplicates.
+- Only use the components listed below — do not invent new component names.
+- Keep it compact. The body renders in a 280×220px DOM box on the canvas. Aim for one Card with a header + 1-2 inner elements.
+- Don't fabricate numbers, dates, or relationships that aren't in the chunk.
+- **Make each body distinctive.** Vary the components based on the node's actual substance — a risk uses a Callout, a metric leads with a large-heavy number, an event leads with a date. Don't make every body look the same (Card + CardHeader + TextContent is a template, not a default).
+
+### Component schema (the only components allowed)
+
+\`Card(children)\` — outer container. \`children\` is an array.
+
+\`CardHeader(title, subtitle?)\` — header inside a Card. Both strings.
+
+\`TextContent(text, size?)\` — text block. \`size\`: \`"small"\` / \`"small-heavy"\` / \`"default"\` / \`"default-heavy"\` / \`"large"\` / \`"large-heavy"\` / \`"x-large"\` / \`"x-large-heavy"\`.
+
+\`Callout(variant, title, description)\` — boxed callout. \`variant\`: \`"info"\` / \`"warning"\` / \`"success"\` / \`"danger"\`.
+
+\`TextCallout(variant, text)\` — single-line callout. Same variants as Callout.
+
+\`TagBlock(tags)\` — row of tag chips. \`tags\` is an array of strings.
+
+\`Stack(children, orientation?, gap?)\` — flex container. \`orientation\`: \`"row"\` / \`"column"\` (default). \`gap\`: \`"s"\` / \`"m"\` (default) / \`"l"\`.
+
+\`LineChart(xValues, [series])\` — only when a metric has multiple values to plot. \`xValues\` is an array; \`series\` is an array of \`Series(name, values)\`.
+
+\`Series(name, values)\` — chart series.
+
+### Useful patterns (not required templates)
+
+These are suggestions for common shapes. You're free to use any combination, or to invent your own composition from the components above.
+
+- A risk where likelihood + impact are stated → \`Callout(variant, ...)\` with variant from severity ("danger" for high/high, "warning" for medium, "info" for low). Put the severity words in the title.
+- A decision with an explicit alternative → CardHeader of the choice + \`TextContent\` rationale + \`TextCallout("info", "Alternative weighed: X.")\`.
+- A metric with a value + target → \`TextContent(value, "x-large-heavy")\` lead, \`TextContent("Target: …", "small")\` sub.
+- A metric over time → \`LineChart\`.
+- An event with a date → CardHeader title + date as subtitle.
+- A person or topic with little extra substance → a single CardHeader is enough. Don't pad.
+- A casual mention → a small \`TextContent\` is fine. Don't dress up something that's just a passing reference.
+
+### Examples
+
+A **risk** body:
+
+\`\`\`
+root = Card([head, callout])
+head = CardHeader("Campaign inconsistency Co-CI ↔ Solomar")
+callout = Callout("danger", "High likelihood / high impact", "Constant flipping between the two campaigns is causing customer-visible bugs.")
+\`\`\`
+
+A **decision** body (with rationale + alternative):
+
+\`\`\`
+root = Card([head, why, alt])
+head = CardHeader("Postgres over MySQL")
+why = TextContent("Window-function performance on Postgres is too valuable to give up.")
+alt = TextCallout("info", "Alternative weighed: MySQL (simpler ops).")
+\`\`\`
+
+A **metric** body (single value):
+
+\`\`\`
+root = Card([head, val, sub])
+head = CardHeader("p95 latency")
+val = TextContent("180ms", "x-large-heavy")
+sub = TextContent("Target: 200ms", "small")
+\`\`\`
+
+A **metric** body with a series:
+
+\`\`\`
+root = Card([head, chart])
+head = CardHeader("Weekly active users")
+chart = LineChart(["Wk 1", "Wk 2", "Wk 3", "Wk 4"], [series1])
+series1 = Series("WAU", [12400, 13100, 13900, 14600])
+\`\`\`
+
+An **event** body:
+
+\`\`\`
+root = Card([head, body])
+head = CardHeader("Postgres migration ship", "Friday EOD")
+body = TextContent("Cuts over the staging DB to the new primary.")
+\`\`\`
+
+An **event** body with tags:
+
+\`\`\`
+root = Card([head, body, tags])
+head = CardHeader("AI focus group", "2026-04-12")
+body = TextContent("Cross-team review of the intelligence backlog.")
+tags = TagBlock(["intelligence", "review"])
+\`\`\`
+
+### What to do if you're unsure
+
+If a node has minimal substance (a casual mention, a one-word topic), the minimum valid body is a Card with a CardHeader. Don't skip the body — even a single-header Card is the right rendering for a thin node. Padding it with empty TextContent is worse than just the header.
+
+### Final checklist (before emitting the diff)
+
+For EVERY node in \`add_nodes\`: confirm \`body\` is populated. Every node. No exceptions. If you finalized any node without one, go back and add it before submitting.
+`;
+
+/**
  * AIZ-32 — attribution-mode system prompt (today's behavior). Used when
  * the input has 2+ distinct named speakers. Includes the `person` node
  * type and speaker-aware extraction guidance.
@@ -18,13 +149,19 @@ You return a structured diff that **adds, updates, merges, or removes** nodes an
 
 ## Posture
 
-**Extract richly.** A casual mention is still a node. "We talked about potatoes — they're easy to grow" should produce \`potatoes\` (topic), \`growing potatoes\` (work_item or sub-topic), and a \`related_to\` edge. Don't wait for "structured" content — single-speaker dictation is just as valid as a multi-person standup.
+The goal is a map of rich, easily understood observations — not a maximalist node count. Bias toward fewer, denser nodes. The canvas exists to show **relationships between distinct ideas** and **how ideas evolve**; the body of each node carries the actual substance. A meeting that produces three richly-composed nodes is better than the same meeting producing twelve thin ones.
 
-**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier. Look there before deciding a chunk has nothing.
+**Update before create.** Before adding a new node, check the current graph. If the chunk extends, refines, or clarifies an existing node, emit an \`update_nodes\` entry — adjust the label, refine the body to include the new substance, add tags, flip status. Only add a fresh node when the chunk introduces something genuinely distinct from what's already on the map.
 
-**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project they're working on, emit \`remove_nodes: ["potato"]\` and \`add_nodes: [{ id: "potato_project", type: "work_item", ... }]\` on the same pass. Don't pile on top of a wrong classification.
+**Consolidate over fragment.** When a chunk produces material that's a single coherent thought (a decision with rationale, alternative weighed, and a contributing risk), prefer expressing it as ONE rich node with a composed body — multiple inner Callouts and TextContents inside one Card — rather than fragmenting into one \`decision\` + one \`risk\` + one \`context\` connected by edges. The graph is sparse and bodies are rich. Fragment only when the pieces are genuinely distinct things with their own lifecycles (people, work_items being tracked separately, etc.).
 
-**Don't thrash.** Removing a node is fine when you're replacing or reclassifying it. Don't drop a stable, useful node just because the new chunk doesn't mention it. The graph is *cumulative* memory — older nodes stay valid unless contradicted.
+**Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely. Reserve nodes for substance the user would want to return to.
+
+**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
+
+**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project they're working on, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
+
+**Don't thrash.** Don't drop a stable, useful node just because the new chunk doesn't mention it. The graph is *cumulative* memory — older nodes stay valid unless contradicted. Just leave them alone.
 
 ## Node types
 
@@ -181,7 +318,9 @@ You: You can take an existing potato, plant it in the ground, and it grows more 
     }
   ]
 }
-\`\`\``;
+\`\`\`
+
+${OPENUI_LANG_NODE_BODY}`;
 
 /**
  * AIZ-32 — substance-mode system prompt. Used when the input has 0 or 1
@@ -211,11 +350,17 @@ This input has no reliable speaker attribution — every chunk is either unlabel
 
 ## Posture
 
-**Extract richly.** A casual mention is still a node. "I've been thinking about potatoes — they're easy to grow" should produce \`potatoes\` (topic), \`growing_potatoes\` (sub-topic or context), and a \`related_to\` edge. Don't wait for "structured" content.
+The goal is a map of rich, easily understood observations — not a maximalist node count. Bias toward fewer, denser nodes. The canvas exists to show **relationships between distinct ideas** and **how ideas evolve**; the body of each node carries the actual substance. A monologue that produces three richly-composed nodes is better than the same monologue producing twelve thin ones.
 
-**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier. Look there before deciding a chunk has nothing.
+**Update before create.** Before adding a new node, check the current graph. If the chunk extends, refines, or clarifies an existing node, emit an \`update_nodes\` entry — adjust the label, refine the body to include the new substance, add tags, flip status. Only add a fresh node when the chunk introduces something genuinely distinct from what's already on the map.
 
-**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project, emit \`remove_nodes: ["potato"]\` and \`add_nodes: [{ id: "potato_project", type: "work_item", ... }]\` on the same pass.
+**Consolidate over fragment.** When a chunk produces material that's a single coherent thought (a decision with rationale + alternative + a related risk), prefer expressing it as ONE rich node with a composed body — multiple inner Callouts and TextContents inside one Card — rather than fragmenting into separate nodes connected by edges. Fragment only when the pieces are genuinely distinct things with their own lifecycles.
+
+**Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely.
+
+**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
+
+**Be willing to restructure.** If a classification turns out wrong, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
 
 **Don't thrash.** The graph is *cumulative* memory — older nodes stay valid unless contradicted.
 
@@ -360,7 +505,9 @@ unknown: Transcript import sidesteps that entirely. If we drop realtime pacing f
 }
 \`\`\`
 
-Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges.`;
+Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges.
+
+${OPENUI_LANG_NODE_BODY}`;
 
 /**
  * AIZ-32 — pick the system prompt that matches the input. Defaults to
@@ -440,7 +587,13 @@ The \`notes\` array works the same way — emit new or changed thoughts only. Af
 
 ## Output
 
-A standard \`GraphDiff\`. \`no_changes: false\` in almost every case. The downstream \`applyDiff\` path is the same one the streaming passes use — there is no separate finalize-only diff format.`;
+A standard \`GraphDiff\`. \`no_changes: false\` in almost every case. The downstream \`applyDiff\` path is the same one the streaming passes use — there is no separate finalize-only diff format.
+
+${OPENUI_LANG_NODE_BODY}
+
+### Finalize-pass specific note
+
+Don't churn good output. If an existing node already has a body, leave it alone — only emit \`update_nodes\` entries when something has genuinely changed (resolved status, merged with another node, etc.). New nodes you add still need bodies, per the rules above.`;
 
 export interface PromptInput {
 	currentGraphJson: string;

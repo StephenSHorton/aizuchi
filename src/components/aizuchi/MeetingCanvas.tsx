@@ -23,6 +23,10 @@ import type {
 	NodeType,
 	Severity,
 } from "@/lib/aizuchi/schemas";
+import {
+	type MeetingTransformAPI,
+	MeetingTransformContext,
+} from "./MeetingTransformContext";
 
 /**
  * AIZ-48 — custom canvas renderer for the meeting graph.
@@ -307,6 +311,14 @@ export function MeetingCanvas({
 	// (mount effect) and the props-change effect, so we keep it in a ref.
 	const scheduleDrawRef = useRef<() => void>(() => {});
 
+	// DOM-overlay subscribers (NodeOverlayLayer). Notified after every draw so
+	// they can re-position absolutely-placed elements to track the canvas
+	// transform without forcing a React re-render on every frame.
+	const subscribersRef = useRef<Set<() => void>>(new Set());
+	// `active` during a pan/zoom gesture; `idle` otherwise. Lets overlay
+	// consumers debounce expensive work during continuous motion.
+	const gestureStateRef = useRef<"idle" | "active">("idle");
+
 	useEffect(() => {
 		const canvas = canvasRef.current;
 		const container = containerRef.current;
@@ -322,6 +334,7 @@ export function MeetingCanvas({
 					transformRef.current,
 					drawStateRef.current,
 				);
+				for (const cb of subscribersRef.current) cb();
 			});
 		};
 		scheduleDrawRef.current = scheduleDraw;
@@ -336,6 +349,7 @@ export function MeetingCanvas({
 			.scaleExtent([0.1, 4])
 			.on("start", (e) => {
 				gestureStart = e.transform;
+				gestureStateRef.current = "active";
 			})
 			.on("zoom", (e) => {
 				transformRef.current = e.transform;
@@ -349,6 +363,10 @@ export function MeetingCanvas({
 						e.transform.y !== s.y ||
 						e.transform.k !== s.k);
 				gestureStart = null;
+				gestureStateRef.current = "idle";
+				// Notify subscribers one more time so they can restore any
+				// during-gesture visibility tricks now that motion has settled.
+				scheduleDraw();
 			});
 		sel.call(z);
 		selectionRef.current = sel;
@@ -592,6 +610,32 @@ export function MeetingCanvas({
 		onNodeHover(null);
 	}, [onNodeHover]);
 
+	// Stable API for DOM-overlay children. All reads route through refs so the
+	// API identity never changes — consumers can capture it once in a
+	// useEffect-mount without re-subscribing on every render. The subscribe
+	// callbacks fire from inside the RAF draw loop above.
+	const transformApi = useMemo<MeetingTransformAPI>(
+		() => ({
+			getTransform: () => transformRef.current,
+			getContainer: () => containerRef.current,
+			getNodeWorldRect: (nodeId) => {
+				const state = drawStateRef.current;
+				const p = state.positions.get(nodeId);
+				const layout = state.nodeLayouts.get(nodeId);
+				if (!p || !layout) return null;
+				return { x: p.x, y: p.y, w: layout.w, h: layout.h };
+			},
+			subscribe: (cb) => {
+				subscribersRef.current.add(cb);
+				return () => {
+					subscribersRef.current.delete(cb);
+				};
+			},
+			getGestureState: () => gestureStateRef.current,
+		}),
+		[],
+	);
+
 	return (
 		<div ref={containerRef} className="relative h-full w-full bg-sidebar">
 			<canvas
@@ -614,7 +658,9 @@ export function MeetingCanvas({
 					{liveMessage}
 				</div>
 			</section>
-			{children}
+			<MeetingTransformContext.Provider value={transformApi}>
+				{children}
+			</MeetingTransformContext.Provider>
 		</div>
 	);
 }
@@ -1055,6 +1101,11 @@ function drawNodes(
 		const p = state.positions.get(n.id);
 		const layout = state.nodeLayouts.get(n.id);
 		if (!p || !layout) continue;
+
+		// AIZ-52 — nodes with an OpenUI Lang body are rendered by NodeBodyLayer
+		// in DOM, not as a canvas pill. Skip pill drawing for those; edges
+		// still connect to the node's rect center so the graph stays coherent.
+		if (typeof n.body === "string" && n.body.length > 0) continue;
 
 		const inN = neighborhood?.nodeIds.has(n.id) ?? false;
 		const dimmed = !!neighborhood && !inN;
