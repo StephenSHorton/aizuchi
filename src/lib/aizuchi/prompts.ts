@@ -302,6 +302,8 @@ If the user prompt includes a \`## Focus question\` block, treat that as the mee
 
 ## Edges
 
+**A relationship is an edge, never a node.** If you find yourself writing a node \`id\` like \`prep_creative_builder-depends_on-clear_backlog\` or \`linear_tooling_concern-is-reinforced-by-backlog_triage\`, stop. That's an edge, not a node. Emit it via \`add_edges\` with \`{ from: "prep_creative_builder", to: "clear_backlog", relation: "depends_on" }\`. The node's label and body describe WHAT the node is; the edge describes HOW two nodes relate. Never encode the relationship inside an \`id\`, label, or type.
+
 **Every edge is a proposition.** Read it aloud as \`A <relation> B\` — if it doesn't form a complete claim a meeting participant could agree or disagree with, the edge is wrong. Bad: \`realtime_pacing in transcript_import\` (preposition, no claim). Good: \`realtime_pacing blocks transcript_import\` (claim).
 
 Each relation has an allowed type signature \`(source → target)\`. Only emit a relation when both ends match an allowed pair. Use the most specific relation that fits — generic edges produce graph-hairball clutter.
@@ -334,6 +336,22 @@ Each relation has an allowed type signature \`(source → target)\`. Only emit a
 - **related_to** \`(* → *)\` — generic association. Only when (a) no specific relation matches AND (b) the relationship is itself the claim being made. If you find yourself emitting \`related_to\` between most pairs of nodes you create, you're co-occurring, not extracting. Drop the edge.
 
 **\`related_to\` and \`mentions\` are escape valves, not workhorses.** Before emitting either, check: could \`causes\`, \`supports\`, \`clarifies\`, \`depends_on\`, \`blocks\`, \`alternative_to\`, \`example_of\`, \`resolves\`, or \`precedes\` fit? If yes, use that. If no specific relation fits AND the connection is weak, **don't emit the edge** — connecting nodes by default produces clutter, not signal.
+
+### Edge descriptions
+
+Each edge can optionally carry a short \`description\` — the WHY behind the proposition, in the speaker's framing. The renderer shows the relation name on every edge (so the proposition is already legible); the description surfaces on hover for nuance the relation alone can't carry.
+
+**Emit a description only when:**
+- The mechanism matters and isn't obvious from the labels — e.g. \`postgres_migration causes ci_failures\` could carry \`description: "shared schema cache invalidation between staging and prod"\` if the speaker named the mechanism.
+- A decision's deciding criterion was stated — e.g. \`postgres alternative_to mysql\` could carry \`description: "chosen for window-function performance"\`.
+- The same relation could mean multiple things and the speaker disambiguated.
+
+**Do NOT emit a description when:**
+- It just restates the relation in different words ("A is related to B" — already implied).
+- It just restates the labels ("the prep meeting depends on the backlog being clean" — already implied).
+- The speaker didn't say it. Don't invent a mechanism.
+
+If in doubt, leave \`description\` empty. The relation name on the edge is usually enough.
 
 ## Status / confidence / quote / tags
 
@@ -524,6 +542,8 @@ If the user prompt includes a \`## Focus question\` block, treat that as the spe
 
 ## Edges (substance subset)
 
+**A relationship is an edge, never a node.** If you find yourself writing a node \`id\` like \`realtime_pacing-blocks-transcript_import\` or \`concern-is-reinforced-by-effort\`, stop. That's an edge, not a node. Emit it via \`add_edges\` with \`{ from, to, relation }\`. The node's label and body describe WHAT the node is; the edge describes HOW two nodes relate. Never encode the relationship inside an \`id\`, label, or type.
+
 **Every edge is a proposition.** Read it aloud as \`A <relation> B\` — if it doesn't form a complete claim, the edge is wrong. Bad: \`realtime_pacing in transcript_import\` (preposition, no claim). Good: \`realtime_pacing blocks transcript_import\` (claim).
 
 Each relation has an allowed type signature \`(source → target)\`. Only emit when both ends match. Use the most specific relation that fits.
@@ -551,6 +571,22 @@ Each relation has an allowed type signature \`(source → target)\`. Only emit w
 **\`related_to\` is an escape valve, not a workhorse.** Before emitting it, check: could \`causes\`, \`supports\`, \`clarifies\`, \`depends_on\`, \`blocks\`, \`alternative_to\`, \`example_of\`, \`resolves\`, or \`precedes\` fit? If yes, use that. If no, **don't emit the edge** — connecting nodes by default produces clutter, not signal.
 
 \`owns\`, \`assigned_to\`, \`mentions\`, \`decides\`, \`asks\` are **excluded** in this mode because they require a person on one side.
+
+### Edge descriptions
+
+Each edge can optionally carry a short \`description\` — the WHY behind the proposition. The renderer shows the relation name on every edge; the description surfaces on hover for nuance the relation alone can't carry.
+
+**Emit a description only when:**
+- The mechanism matters and isn't obvious from the labels (e.g. \`A causes B\` with description naming the mechanism).
+- A decision's deciding criterion was stated (e.g. \`A alternative_to B\` with description \`"chosen for X"\`).
+- The same relation could mean multiple things and the speaker disambiguated.
+
+**Do NOT emit a description when:**
+- It just restates the relation in different words.
+- It just restates the labels.
+- The speaker didn't say it. Don't invent a mechanism.
+
+If in doubt, leave \`description\` empty. The relation name on the edge is usually enough.
 
 ## Status / confidence / quote / tags
 
