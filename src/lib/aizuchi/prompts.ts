@@ -149,13 +149,19 @@ You return a structured diff that **adds, updates, merges, or removes** nodes an
 
 ## Posture
 
-**Extract richly.** A casual mention is still a node. "We talked about potatoes — they're easy to grow" should produce \`potatoes\` (topic), \`growing potatoes\` (work_item or sub-topic), and a \`related_to\` edge. Don't wait for "structured" content — single-speaker dictation is just as valid as a multi-person standup.
+The goal is a map of rich, easily understood observations — not a maximalist node count. Bias toward fewer, denser nodes. The canvas exists to show **relationships between distinct ideas** and **how ideas evolve**; the body of each node carries the actual substance. A meeting that produces three richly-composed nodes is better than the same meeting producing twelve thin ones.
 
-**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier. Look there before deciding a chunk has nothing.
+**Update before create.** Before adding a new node, check the current graph. If the chunk extends, refines, or clarifies an existing node, emit an \`update_nodes\` entry — adjust the label, refine the body to include the new substance, add tags, flip status. Only add a fresh node when the chunk introduces something genuinely distinct from what's already on the map.
 
-**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project they're working on, emit \`remove_nodes: ["potato"]\` and \`add_nodes: [{ id: "potato_project", type: "work_item", ... }]\` on the same pass. Don't pile on top of a wrong classification.
+**Consolidate over fragment.** When a chunk produces material that's a single coherent thought (a decision with rationale, alternative weighed, and a contributing risk), prefer expressing it as ONE rich node with a composed body — multiple inner Callouts and TextContents inside one Card — rather than fragmenting into one \`decision\` + one \`risk\` + one \`context\` connected by edges. The graph is sparse and bodies are rich. Fragment only when the pieces are genuinely distinct things with their own lifecycles (people, work_items being tracked separately, etc.).
 
-**Don't thrash.** Removing a node is fine when you're replacing or reclassifying it. Don't drop a stable, useful node just because the new chunk doesn't mention it. The graph is *cumulative* memory — older nodes stay valid unless contradicted.
+**Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely. Reserve nodes for substance the user would want to return to.
+
+**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
+
+**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project they're working on, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
+
+**Don't thrash.** Don't drop a stable, useful node just because the new chunk doesn't mention it. The graph is *cumulative* memory — older nodes stay valid unless contradicted. Just leave them alone.
 
 ## Node types
 
@@ -344,11 +350,17 @@ This input has no reliable speaker attribution — every chunk is either unlabel
 
 ## Posture
 
-**Extract richly.** A casual mention is still a node. "I've been thinking about potatoes — they're easy to grow" should produce \`potatoes\` (topic), \`growing_potatoes\` (sub-topic or context), and a \`related_to\` edge. Don't wait for "structured" content.
+The goal is a map of rich, easily understood observations — not a maximalist node count. Bias toward fewer, denser nodes. The canvas exists to show **relationships between distinct ideas** and **how ideas evolve**; the body of each node carries the actual substance. A monologue that produces three richly-composed nodes is better than the same monologue producing twelve thin ones.
 
-**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier. Look there before deciding a chunk has nothing.
+**Update before create.** Before adding a new node, check the current graph. If the chunk extends, refines, or clarifies an existing node, emit an \`update_nodes\` entry — adjust the label, refine the body to include the new substance, add tags, flip status. Only add a fresh node when the chunk introduces something genuinely distinct from what's already on the map.
 
-**Be willing to restructure.** If you classified \`potato\` as a topic on pass 1 and now realize the speaker is treating it as a project, emit \`remove_nodes: ["potato"]\` and \`add_nodes: [{ id: "potato_project", type: "work_item", ... }]\` on the same pass.
+**Consolidate over fragment.** When a chunk produces material that's a single coherent thought (a decision with rationale + alternative + a related risk), prefer expressing it as ONE rich node with a composed body — multiple inner Callouts and TextContents inside one Card — rather than fragmenting into separate nodes connected by edges. Fragment only when the pieces are genuinely distinct things with their own lifecycles.
+
+**Casual mentions don't need their own node.** A passing reference can ride inside an existing node's body, or be omitted entirely.
+
+**Use the recent transcript window for coreference.** "It" / "that" / "they" almost always refer to something earlier — usually to a node already in the graph. Treat coreference as a signal to UPDATE that node, not to create a sibling.
+
+**Be willing to restructure.** If a classification turns out wrong, prefer \`update_nodes\` to change type/label/body in place; emit \`remove_nodes\` + \`add_nodes\` only when the change is so large the id should change too.
 
 **Don't thrash.** The graph is *cumulative* memory — older nodes stay valid unless contradicted.
 

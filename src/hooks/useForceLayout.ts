@@ -50,7 +50,14 @@ const COLLISION_RADIUS = Math.hypot(CARD_W, CARD_H) / 2 + 32;
  * the "trees with branches" pattern the user asked for: structure
  * grows outward from the conversation's actual gravity.
  */
-const RING_SPACING = 380;
+// AIZ-52 — bumped from 380 → 600 along with the all-nodes-OpenUI move.
+// With every node now rendering as a Card (rather than typed pill),
+// ring 1 fills up faster — 7+ first-degree neighbors at radius 380
+// have only ~50° of angular space each, which is less than the new
+// collision diameter. Doubling the ring radius gives the BFS-radial
+// layout enough room to fit several cards on a single ring without
+// over-pulling them into collide-conflict.
+const RING_SPACING = 600;
 const DISCONNECTED_RADIUS_FALLBACK = 3000;
 // Focus-mode "buffer zone" radius around world (0,0). Dimmed/pinned nodes
 // inside this radius get nudged outward along their current angle so they
@@ -427,7 +434,7 @@ export function useForceLayout(
 					},
 					0,
 					0,
-				).strength((d) => (bfsDist.has(d.id) ? 0.6 : 0.05));
+				).strength((d) => (bfsDist.has(d.id) ? 0.4 : 0.05));
 
 		// Alpha bump magnitude. Focus enter/leave gets a noticeably higher
 		// kick so the neighborhood actually flicks; ordinary graph mutations
