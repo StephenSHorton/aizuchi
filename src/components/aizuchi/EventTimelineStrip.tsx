@@ -20,7 +20,7 @@ import type { Node as AzNode, Graph } from "@/lib/aizuchi/schemas";
 
 const STRIP_HEIGHT = 80;
 const CHIP_GAP = 12;
-const EVENT_COLOR = "rgb(217, 70, 239)"; // fuchsia, matches MeetingCanvas TYPE_COLOR.event
+const EVENT_COLOR = "rgb(217, 70, 239)"; // fuchsia — event-type accent across the app
 
 interface EventTimelineStripProps {
 	graph: Graph;

@@ -2,15 +2,21 @@ import type { ExtractionMode } from "./persistence";
 import type { AIThought } from "./schemas";
 
 /**
- * AIZ-52 / AIZ-59 — OpenUI Lang body emission rules. Appended to both the
- * attribution and substance system prompts. Every node Gemma adds carries
- * an OpenUI Lang `body` that the frontend renders via `<Renderer>`. No
- * "type-based pills" any more — the entire mind-map is composed by Gemma.
+ * AIZ-52 / AIZ-59 / AIZ-66 — OpenUI Lang body emission rules. Appended to
+ * both the attribution and substance system prompts. Every node Gemma adds
+ * carries an OpenUI Lang `body` that the frontend renders via `<Renderer>`.
+ * No "type-based pills" any more — the entire mind-map is composed by Gemma.
  *
- * Curated to a small component subset (Card / TextContent / CardHeader /
- * Callout / TextCallout / TagBlock / Stack / LineChart / Series) so
- * Gemma 4 8B has a tight surface to track — the full openuiChatLibrary
- * prompt is ~15 KB and would dominate the extraction context.
+ * Curated to a working subset of openuiChatLibrary so Gemma 4 8B has a
+ * tight surface to track — the full library prompt is ~15 KB and would
+ * dominate the extraction context. The subset is now broader than the
+ * AIZ-52 original (added MarkDownRenderer / ListBlock / Steps / Accordion
+ * / BarChart / Separator / Tag) so bodies have meaningful range without
+ * blowing the prompt budget.
+ *
+ * Component signatures and TextContent size enum match the live
+ * openuiChatLibrary spec — keep them aligned if @openuidev/react-ui
+ * upgrades, otherwise Gemma will emit silently-invalid DSL.
  *
  * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
  * "no JSON / no code fences", "single root", "no invented components."
@@ -19,7 +25,7 @@ const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — REQUIRED on every node yo
 
 Every node you add MUST include a \`body\` field containing OpenUI Lang DSL. This is non-negotiable — without a body, the node has no visual on the canvas. Treat \`body\` as if Zod required it (it's marked optional only so older snapshots remain valid).
 
-You have full creative freedom over what the body looks like. Pick the components that best fit the observation. A risk might be a single \`Callout("danger", ...)\`. A decision might be a header + rationale + alternative. A metric might be an x-large-heavy value tile, or a LineChart if there's a series. A casual topic might be just a header. There are no required templates per type — compose what fits.
+You have full creative freedom over what the body looks like. Pick the components that best fit the observation. A risk might be a single \`Callout("danger", ...)\`. A decision might be a header + rationale + alternative, or a \`Steps\` breakdown of how it was reached. A metric might be a large-heavy value tile, a \`BarChart\` across categories, or a \`LineChart\` over time. A casual topic might be just a header. There are no required templates per type — compose what fits.
 
 ### Composition latitude — sometimes one rich node beats three thin ones
 
@@ -30,53 +36,107 @@ When you do fragment into many nodes, keep their bodies appropriate: a casual \`
 ### Hard rules
 
 - The \`body\` value is a STRING containing raw OpenUI Lang DSL. Not JSON. Not wrapped in markdown code fences. Not commentary.
-- Use variable-assignment syntax: \`root = ...\` then helper vars on their own lines.
+- Use variable-assignment syntax: \`root = ...\` then helper vars on their own lines. \`root = Card(...)\` MUST be the first line for clean streaming.
 - Emit a single \`root = ...\` definition per body. No duplicates.
 - Only use the components listed below — do not invent new component names.
-- Keep it compact. The body renders in a 280×220px DOM box on the canvas. Aim for one Card with a header + 1-2 inner elements.
+- Arguments are POSITIONAL. Write \`Callout("danger", title, desc)\` not \`Callout(variant: "danger", ...)\`. Colon syntax silently breaks.
+- Every variable except \`root\` MUST be referenced by another variable. Unreferenced names are dropped and won't render.
+- Keep it compact. The body renders in a 280×300 pixel DOM box on the canvas (scrolls internally if taller). Aim for one Card with a header + 1-3 inner elements. Reach for Accordion / Steps / ListBlock when the observation has 3+ sub-items that genuinely belong together.
 - Don't fabricate numbers, dates, or relationships that aren't in the chunk.
-- **Make each body distinctive.** Vary the components based on the node's actual substance — a risk uses a Callout, a metric leads with a large-heavy number, an event leads with a date. Don't make every body look the same (Card + CardHeader + TextContent is a template, not a default).
+- **Make each body distinctive.** Vary the components based on the node's actual substance — a risk uses a Callout, a metric leads with a large-heavy number or a chart, an action item lists its sub-tasks, an event leads with a date. Don't make every body look the same (Card + CardHeader + TextContent is one option, not a default).
 
 ### Component schema (the only components allowed)
 
-\`Card(children)\` — outer container. \`children\` is an array.
+**Containers**
 
-\`CardHeader(title, subtitle?)\` — header inside a Card. Both strings.
+\`Card(children)\` — outer container. \`children\` is an array. The \`root\` MUST be a \`Card(...)\`.
 
-\`TextContent(text, size?)\` — text block. \`size\`: \`"small"\` / \`"small-heavy"\` / \`"default"\` / \`"default-heavy"\` / \`"large"\` / \`"large-heavy"\` / \`"x-large"\` / \`"x-large-heavy"\`.
+\`CardHeader(title, subtitle?)\` — header inside a Card. Both strings. \`subtitle\` is a good slot for dates / status / "decided" annotations.
 
-\`Callout(variant, title, description)\` — boxed callout. \`variant\`: \`"info"\` / \`"warning"\` / \`"success"\` / \`"danger"\`.
+\`Separator()\` — thin horizontal divider. Use sparingly to break a Card into logical halves (e.g. claim vs evidence).
 
-\`TextCallout(variant, text)\` — single-line callout. Same variants as Callout.
+**Text**
 
-\`TagBlock(tags)\` — row of tag chips. \`tags\` is an array of strings.
+\`TextContent(text, size?)\` — text block. \`size\` is one of: \`"small"\` / \`"small-heavy"\` / \`"default"\` / \`"large"\` / \`"large-heavy"\`. Default is \`"default"\`. Supports lightweight markdown inline.
 
-\`Stack(children, orientation?, gap?)\` — flex container. \`orientation\`: \`"row"\` / \`"column"\` (default). \`gap\`: \`"s"\` / \`"m"\` (default) / \`"l"\`.
+\`MarkDownRenderer(textMarkdown, variant?)\` — full markdown block (bold, italics, bullets, links). \`variant\`: \`"clear"\` / \`"card"\` / \`"sunk"\`. Prefer over chained TextContents when the observation has more than ~2 short paragraphs of prose.
 
-\`LineChart(xValues, [series])\` — only when a metric has multiple values to plot. \`xValues\` is an array; \`series\` is an array of \`Series(name, values)\`.
+**Callouts & tags**
 
-\`Series(name, values)\` — chart series.
+\`Callout(variant, title, description)\` — boxed callout. \`variant\`: \`"info"\` / \`"warning"\` / \`"success"\` / \`"danger"\` / \`"neutral"\` / \`"error"\`.
+
+\`TextCallout(variant?, title?, description?)\` — single-line callout. Same variants as Callout. Useful for "Alternative weighed: …" / "Open question: …" annotations.
+
+\`Tag(text, icon?, size?, variant?)\` — individual chip. \`variant\`: \`"neutral"\` / \`"info"\` / \`"success"\` / \`"warning"\` / \`"danger"\`. \`size\`: \`"sm"\` / \`"md"\` / \`"lg"\`. Prefer over TagBlock when ONE tag needs emphasis (e.g. a single severity badge).
+
+\`TagBlock(tags)\` — row of plain string chips. Use when listing 2+ neutral tags.
+
+**Lists & sequences**
+
+\`ListBlock(items, variant?)\` — numbered or image list. \`variant\`: \`"number"\` / \`"image"\`. \`items\` is an array of \`ListItem\` references. Use for action-item sub-tasks, hypothesis assumptions, or enumerated considerations.
+
+\`ListItem(title, subtitle?)\` — one entry in a ListBlock. Keep titles short; subtitle is the elaboration.
+
+\`Steps(items)\` — vertical step-by-step display. \`items\` is an array of \`StepsItem\` references. Use for decision rationale paths or migration sequences.
+
+\`StepsItem(title, details)\` — one step. Both strings.
+
+\`Accordion(items)\` — collapsible sections, starts folded. \`items\` is an array of \`AccordionItem\` references. Use for "background detail you'd reach for if curious" — alternative options weighed, fuller risk mitigation list.
+
+\`AccordionItem(value, trigger, content)\` — one section. \`value\` is a unique id ("alt", "mitigation"). \`trigger\` is the visible label. \`content\` is an array of components (TextContent, MarkDownRenderer, Callout, TextCallout, CodeBlock, BarChart, LineChart, AreaChart, RadarChart, etc.).
+
+**Code**
+
+\`CodeBlock(language, codeString)\` — fenced code block. \`language\` is "ts" / "py" / "sql" etc. Use only when actual code or a literal command was discussed.
+
+**Charts**
+
+\`LineChart(labels, [series], variant?)\` — trend over time. \`labels\` is an array; \`series\` is an array of \`Series\` references. \`variant\`: \`"linear"\` (default) / \`"natural"\` / \`"step"\`.
+
+\`BarChart(labels, [series], variant?)\` — values across categories. \`variant\`: \`"grouped"\` (default) / \`"stacked"\`. Use for comparing teams, environments, weeks, etc.
+
+\`AreaChart(labels, [series], variant?)\` — cumulative trend. Use when total volume matters more than the line.
+
+\`Series(category, values)\` — one chart series. \`values\` is an array of numbers.
 
 ### Useful patterns (not required templates)
 
 These are suggestions for common shapes. You're free to use any combination, or to invent your own composition from the components above.
 
-- A risk where likelihood + impact are stated → \`Callout(variant, ...)\` with variant from severity ("danger" for high/high, "warning" for medium, "info" for low). Put the severity words in the title.
-- A decision with an explicit alternative → CardHeader of the choice + \`TextContent\` rationale + \`TextCallout("info", "Alternative weighed: X.")\`.
-- A metric with a value + target → \`TextContent(value, "x-large-heavy")\` lead, \`TextContent("Target: …", "small")\` sub.
+- A risk with stated likelihood + impact → \`Callout(variant, ...)\` with variant by severity (\`"danger"\` for high/high, \`"warning"\` for medium, \`"info"\` for low). Put the severity words in the title.
+- A risk with several mitigations being considered → \`CardHeader\` + \`Callout\` for the risk, then \`Accordion\` with one \`AccordionItem\` per mitigation so the detail is on-demand.
+- A decision with an explicit alternative → \`CardHeader\` + \`TextContent\` rationale + \`TextCallout("info", "Alternative weighed", "X.")\`.
+- A decision reached through multiple considerations → \`CardHeader\` + \`Steps\` listing the considerations in order.
+- A metric with a value + target → \`TextContent(value, "large-heavy")\` lead, \`TextContent("Target: …", "small")\` sub.
 - A metric over time → \`LineChart\`.
-- An event with a date → CardHeader title + date as subtitle.
-- A person or topic with little extra substance → a single CardHeader is enough. Don't pad.
+- A metric compared across categories (teams, regions, components) → \`BarChart\`.
+- An event with a date → \`CardHeader\` title + date as subtitle.
+- An action_item with sub-tasks → \`CardHeader\` of the commitment + \`ListBlock\` of the sub-tasks.
+- A hypothesis with stated assumptions → \`CardHeader\` of the "if/then" + \`ListBlock\` of assumptions ("Assumes …").
+- A person or topic with little extra substance → a single \`CardHeader\` is enough. Don't pad.
 - A casual mention → a small \`TextContent\` is fine. Don't dress up something that's just a passing reference.
 
 ### Examples
 
-A **risk** body:
+A **risk** body (simple):
 
 \`\`\`
 root = Card([head, callout])
 head = CardHeader("Campaign inconsistency Co-CI ↔ Solomar")
 callout = Callout("danger", "High likelihood / high impact", "Constant flipping between the two campaigns is causing customer-visible bugs.")
+\`\`\`
+
+A **risk** body with mitigations tucked under an Accordion:
+
+\`\`\`
+root = Card([head, callout, mit])
+head = CardHeader("Whisper segments dropping mid-import")
+callout = Callout("warning", "Medium likelihood / high impact", "Decoder failures cause partial transcripts to land silently.")
+mit = Accordion([m1, m2])
+m1 = AccordionItem("retry", "Per-segment retry on decode failure", [m1text])
+m1text = TextContent("Retry once with a larger context window before dropping the segment.")
+m2 = AccordionItem("alert", "Surface decode failures in the status panel", [m2text])
+m2text = TextContent("User can re-import affected segments.")
 \`\`\`
 
 A **decision** body (with rationale + alternative):
@@ -85,7 +145,18 @@ A **decision** body (with rationale + alternative):
 root = Card([head, why, alt])
 head = CardHeader("Postgres over MySQL")
 why = TextContent("Window-function performance on Postgres is too valuable to give up.")
-alt = TextCallout("info", "Alternative weighed: MySQL (simpler ops).")
+alt = TextCallout("info", "Alternative weighed", "MySQL (simpler ops).")
+\`\`\`
+
+A **decision** body composed as Steps:
+
+\`\`\`
+root = Card([head, steps])
+head = CardHeader("Migrate the canvas back to ReactFlow")
+steps = Steps([s1, s2, s3])
+s1 = StepsItem("Every node became DOM", "AIZ-52 made bodies universal, so we already pay DOM-per-node.")
+s2 = StepsItem("Custom canvas is now overhead", "MeetingTransformContext + RAF imperative positioning add complexity for no gain.")
+s3 = StepsItem("ReactFlow gives clicks, zoom, edge routing for free", "Less code to maintain.")
 \`\`\`
 
 A **metric** body (single value):
@@ -93,7 +164,7 @@ A **metric** body (single value):
 \`\`\`
 root = Card([head, val, sub])
 head = CardHeader("p95 latency")
-val = TextContent("180ms", "x-large-heavy")
+val = TextContent("180ms", "large-heavy")
 sub = TextContent("Target: 200ms", "small")
 \`\`\`
 
@@ -104,6 +175,26 @@ root = Card([head, chart])
 head = CardHeader("Weekly active users")
 chart = LineChart(["Wk 1", "Wk 2", "Wk 3", "Wk 4"], [series1])
 series1 = Series("WAU", [12400, 13100, 13900, 14600])
+\`\`\`
+
+A **metric** body comparing categories:
+
+\`\`\`
+root = Card([head, chart])
+head = CardHeader("Failed checks by environment")
+chart = BarChart(["staging", "preprod", "prod"], [series1])
+series1 = Series("count", [3, 1, 0])
+\`\`\`
+
+An **action_item** body with sub-tasks:
+
+\`\`\`
+root = Card([head, list])
+head = CardHeader("Priya: ship the badge UX one-pager", "by Friday")
+list = ListBlock([i1, i2, i3])
+i1 = ListItem("States to cover", "earned, in-progress, locked")
+i2 = ListItem("Open question", "do badges expire?")
+i3 = ListItem("Hand off to", "Travis for review")
 \`\`\`
 
 An **event** body:
@@ -123,13 +214,21 @@ body = TextContent("Cross-team review of the intelligence backlog.")
 tags = TagBlock(["intelligence", "review"])
 \`\`\`
 
+A **context** body using markdown for prose:
+
+\`\`\`
+root = Card([head, md])
+head = CardHeader("Why we paused the v2 onboarding flow")
+md = MarkDownRenderer("Two reasons:\\n\\n- **Conversion regressed** vs. v1 in the A/B (-8% week 1).\\n- The skip-link copy tested **as confusing** in 3 of 5 sessions.\\n\\nResuming after the copy rewrite ships.")
+\`\`\`
+
 ### What to do if you're unsure
 
 If a node has minimal substance (a casual mention, a one-word topic), the minimum valid body is a Card with a CardHeader. Don't skip the body — even a single-header Card is the right rendering for a thin node. Padding it with empty TextContent is worse than just the header.
 
 ### Final checklist (before emitting the diff)
 
-For EVERY node in \`add_nodes\`: confirm \`body\` is populated. Every node. No exceptions. If you finalized any node without one, go back and add it before submitting.
+For EVERY node in \`add_nodes\`: confirm \`body\` is populated, \`root = Card(...)\` is the first line, every helper variable is referenced from another variable, and arguments are positional (no \`name:\` syntax). Every node. No exceptions.
 `;
 
 /**

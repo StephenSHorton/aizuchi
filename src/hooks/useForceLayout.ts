@@ -32,7 +32,7 @@ import type { EdgeRelation, Graph } from "@/lib/aizuchi/schemas";
 
 // AIZ-52 / AIZ-59 — every node is now an OpenUI body (DOM card). Sizes
 // are tuned for the body's DOM footprint (280px wide, capped at 300px
-// tall in NodeBody.tsx) plus generous padding so the force sim spreads
+// tall in MeetingFlowCanvas.tsx) plus generous padding so the force sim spreads
 // cards out instead of crowding them. The horizontal value is intentionally
 // wider than the body because two cards adjacent feel tight when separated
 // only by their own widths.
@@ -100,7 +100,7 @@ export interface ForceLayoutResult {
 	/**
 	 * Timestamp (Date.now()) of the most recent simulation settle. Updated
 	 * each time the sim's `end` event fires (alpha drops below alphaMin).
-	 * MeetingCanvas waits on this so it only fires fitView when the nodes
+	 * MeetingFlowCanvas waits on this so it only fires fitView when the nodes
 	 * have actually stopped moving — otherwise the camera frames mid-flight
 	 * positions the simulation immediately leaves behind.
 	 * 0 before any settle has occurred.

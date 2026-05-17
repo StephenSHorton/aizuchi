@@ -10,10 +10,9 @@ import {
 } from "react-resizable-panels";
 import { EventTimelineStrip } from "@/components/aizuchi/EventTimelineStrip";
 import { LiveTranscript } from "@/components/aizuchi/LiveTranscript";
-import { MeetingCanvas } from "@/components/aizuchi/MeetingCanvas";
+import { MeetingFlowCanvas } from "@/components/aizuchi/MeetingFlowCanvas";
 import { MeetingOutline } from "@/components/aizuchi/MeetingOutline";
 import { MeetingStatusPanel } from "@/components/aizuchi/MeetingStatusPanel";
-import { NodeBodyLayer } from "@/components/aizuchi/NodeBodyLayer";
 import { useCommandPaletteHotkey } from "@/hooks/useCommandPaletteHotkey";
 import { useForceLayout } from "@/hooks/useForceLayout";
 import { useMeetingDebugSnapshot } from "@/hooks/useMeetingDebugSnapshot";
@@ -296,7 +295,7 @@ function MeetingPrototype() {
 					<div className="relative flex h-full w-full flex-col">
 						<div className="aiz-canvas-shield pointer-events-none absolute inset-0 z-[2000] hidden" />
 						<div className="relative min-h-0 flex-1">
-							<MeetingCanvas
+							<MeetingFlowCanvas
 								graph={session.graph}
 								positions={positions}
 								highlightIds={session.highlightIds}
@@ -306,10 +305,6 @@ function MeetingPrototype() {
 								onPaneClick={onPaneClick}
 								onNodeHover={onNodeHover}
 							>
-								<NodeBodyLayer
-									graph={session.graph}
-									onNodeClick={onNodeClick}
-								/>
 								<div className="pointer-events-none absolute inset-0 z-20">
 									<div className="pointer-events-auto absolute top-2 left-2">
 										<MeetingStatusPanel
@@ -350,7 +345,7 @@ function MeetingPrototype() {
 										</div>
 									)}
 								</div>
-							</MeetingCanvas>
+							</MeetingFlowCanvas>
 						</div>
 						<EventTimelineStrip
 							graph={session.graph}
