@@ -1,5 +1,37 @@
 import type { ExtractionMode } from "./persistence";
-import type { Edge, EdgeRelation, Graph, GraphDiff, Node } from "./schemas";
+import type {
+	Edge,
+	EdgeRelation,
+	Graph,
+	GraphDiff,
+	Node,
+	NodeType,
+} from "./schemas";
+
+// AIZ-52 — only these node types are allowed to carry an OpenUI Lang
+// `body`. Bodies on other types are an over-emission by Gemma — silently
+// dropped here so the frontend doesn't try to render Card-shells for
+// every context/work_item node and crowd out the canvas.
+const RICH_BODY_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
+	"decision",
+	"risk",
+	"metric",
+	"event",
+]);
+
+function stripStrayBody<T extends { type?: NodeType; body?: string }>(
+	node: T,
+): T {
+	if (
+		node.body !== undefined &&
+		node.type !== undefined &&
+		!RICH_BODY_TYPES.has(node.type)
+	) {
+		const { body: _body, ...rest } = node;
+		return rest as T;
+	}
+	return node;
+}
 
 const SPECIFIC_RELATIONS: ReadonlySet<EdgeRelation> = new Set([
 	"owns",
@@ -304,9 +336,9 @@ export function normalizeDiff(
 	return {
 		diff: {
 			...diff,
-			add_nodes: [...filteredAddNodes, ...addedPersonNodes],
+			add_nodes: [...filteredAddNodes, ...addedPersonNodes].map(stripStrayBody),
 			add_edges: filteredEdges,
-			update_nodes: filteredUpdateNodes,
+			update_nodes: filteredUpdateNodes.map(stripStrayBody),
 			merge_nodes: filteredMerges,
 			remove_nodes: removeNodes,
 			remove_edges: removeEdges,

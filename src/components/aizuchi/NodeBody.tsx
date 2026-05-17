@@ -1,5 +1,6 @@
 import { Renderer } from "@openuidev/react-lang";
-import { openuiChatLibrary } from "@openuidev/react-ui";
+import { openuiChatLibrary, ThemeProvider } from "@openuidev/react-ui";
+import { useTheme } from "next-themes";
 import { useEffect, useRef } from "react";
 import { useMeetingTransform } from "./MeetingTransformContext";
 
@@ -9,6 +10,7 @@ interface NodeBodyProps {
 }
 
 const BODY_WIDTH = 280;
+const BODY_MAX_HEIGHT = 220;
 
 /**
  * AIZ-52 — DOM render of a single node's OpenUI Lang body, docked at the
@@ -19,10 +21,17 @@ const BODY_WIDTH = 280;
  *
  * Centered on the node's geometric center (not anchored to a side) since
  * the body REPLACES the pill rather than overlaying it.
+ *
+ * Theme is forwarded to OpenUI's ThemeProvider from next-themes so the
+ * cards follow the app's light/dark mode instead of OpenUI's built-in
+ * default. Height is capped so the force-layout collision rect (~220 in
+ * useForceLayout.ts) keeps approximately matching the rendered DOM size.
  */
 export function NodeBody({ nodeId, body }: NodeBodyProps) {
 	const api = useMeetingTransform();
 	const ref = useRef<HTMLDivElement>(null);
+	const { resolvedTheme } = useTheme();
+	const mode = resolvedTheme === "dark" ? "dark" : "light";
 
 	useEffect(() => {
 		const el = ref.current;
@@ -53,14 +62,17 @@ export function NodeBody({ nodeId, body }: NodeBodyProps) {
 		<div
 			ref={ref}
 			data-node-body={nodeId}
-			className="absolute top-0 left-0 will-change-transform"
+			className="absolute top-0 left-0 overflow-y-auto will-change-transform"
 			style={{
 				width: BODY_WIDTH,
+				maxHeight: BODY_MAX_HEIGHT,
 				opacity: 0,
 				pointerEvents: "none",
 			}}
 		>
-			<Renderer library={openuiChatLibrary} response={body} />
+			<ThemeProvider mode={mode}>
+				<Renderer library={openuiChatLibrary} response={body} />
+			</ThemeProvider>
 		</div>
 	);
 }

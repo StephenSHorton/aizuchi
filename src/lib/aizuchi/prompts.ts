@@ -16,16 +16,16 @@ import type { AIThought } from "./schemas";
  * Anti-failure-mode rules baked in from AIZ-51 diagnostics: explicit
  * "no JSON / no code fences", "single root", "no invented components."
  */
-const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body (rich types only)
+const OPENUI_LANG_NODE_BODY = `## OpenUI Lang body — ONLY for rich types
 
-For these node types, emit a \`body\` field containing OpenUI Lang DSL alongside the other fields:
+Emit a \`body\` field containing OpenUI Lang DSL **only for these four node types**:
 
 - **decision** — required
 - **risk** — required
 - **metric** — required
 - **event** — required
 
-For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\`): **omit the body field.** The canvas renders these as the existing typed pill.
+**For every other type — \`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`question\`, \`context\`, \`assumption\`, \`constraint\`, \`hypothesis\`, \`artifact\`, \`sentiment\`, \`person\` — DO NOT emit a body. Leave the field absent.** The canvas renders these as a typed pill, which is the right visual for them. Emitting a body on a non-rich type is treated as a bug and discarded downstream.
 
 ### Hard rules
 
@@ -33,8 +33,9 @@ For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`
 - Use variable-assignment syntax: \`root = ...\` then helper vars on their own lines.
 - Emit a single \`root = ...\` definition per body. No duplicates.
 - Only use the components listed below — do not invent new component names.
-- Keep it compact. The body renders in a ~280px-wide DOM box on the canvas. Aim for one Card with a header + 1-2 inner elements. No multi-tab dashboards.
+- Keep it compact. The body renders in a 280×220px DOM box on the canvas. Aim for one Card with a header + 1-2 inner elements.
 - Don't fabricate numbers, dates, or relationships that aren't in the chunk.
+- **Make each body distinctive.** Vary the components based on the node's actual substance — a risk uses a Callout, a metric leads with a large-heavy number, an event leads with a date. Don't make every body look the same (Card + CardHeader + TextContent is a template, not a default).
 
 ### Component schema (the only components allowed)
 
@@ -42,39 +43,50 @@ For every other type (\`topic\`, \`work_item\`, \`blocker\`, \`action_item\`, \`
 
 \`CardHeader(title, subtitle?)\` — header inside a Card. Both strings.
 
-\`TextContent(text, size?)\` — text block. \`size\` is one of: \`"small"\`, \`"small-heavy"\`, \`"default"\`, \`"default-heavy"\`, \`"large"\`, \`"large-heavy"\`, \`"x-large"\`, \`"x-large-heavy"\`.
+\`TextContent(text, size?)\` — text block. \`size\`: \`"small"\` / \`"small-heavy"\` / \`"default"\` / \`"default-heavy"\` / \`"large"\` / \`"large-heavy"\` / \`"x-large"\` / \`"x-large-heavy"\`.
 
-\`Callout(variant, title, description)\` — boxed callout. \`variant\` is one of: \`"info"\`, \`"warning"\`, \`"success"\`, \`"danger"\`.
+\`Callout(variant, title, description)\` — boxed callout. \`variant\`: \`"info"\` / \`"warning"\` / \`"success"\` / \`"danger"\`.
 
 \`TextCallout(variant, text)\` — single-line callout. Same variants as Callout.
 
 \`TagBlock(tags)\` — row of tag chips. \`tags\` is an array of strings.
 
-\`Stack(children, orientation?, gap?)\` — flex container. \`orientation\` is \`"row"\` or \`"column"\` (default). \`gap\` is \`"s"\`, \`"m"\` (default), or \`"l"\`.
+\`Stack(children, orientation?, gap?)\` — flex container. \`orientation\`: \`"row"\` / \`"column"\` (default). \`gap\`: \`"s"\` / \`"m"\` (default) / \`"l"\`.
 
-\`LineChart(xValues, [series])\` — only for metrics with multiple values. \`xValues\` is an array of strings or numbers; \`series\` is an array of \`Series(name, values)\`.
+\`LineChart(xValues, [series])\` — only when a metric has multiple values to plot. \`xValues\` is an array; \`series\` is an array of \`Series(name, values)\`.
 
 \`Series(name, values)\` — chart series.
 
+### Type-specific patterns
+
+**risk** — lead with \`Callout(variant, ...)\`. Pick the variant by severity: \`"danger"\` for high-likelihood + high-impact, \`"warning"\` for medium severity, \`"info"\` for low. Mention the actual likelihood/impact words in the title (e.g. "High likelihood / high impact"). The pill chrome already draws severity dots — your body adds the explanation.
+
+**decision** — lead with the CHOICE in a CardHeader (large, declarative). If an alternative was rejected, use \`TextCallout("info", "Alternative weighed: X.")\`. If a rationale was stated, add a \`TextContent\` (size \`"default"\`). Avoid headers like "Decision:" — the type itself signals it.
+
+**metric** — lead with the VALUE in a \`TextContent(value, "x-large-heavy")\`. If a target was stated, add \`TextContent("Target: ...", "small")\`. If multiple values over time are mentioned, use \`LineChart\`. The label/topic goes in a CardHeader ABOVE the value.
+
+**event** — lead with the date/timing in a CardHeader subtitle slot. The event label is the title. Add a \`TextContent\` describing what happens, if more than the label was said.
+
 ### Examples
 
-A **risk** node body (likelihood/impact dots are already drawn in the pill chrome — don't duplicate them numerically):
+A **risk** body:
 
 \`\`\`
 root = Card([head, callout])
 head = CardHeader("Campaign inconsistency Co-CI ↔ Solomar")
-callout = Callout("warning", "High-likelihood high-impact", "Constant flipping between the two campaigns is causing downstream issues.")
+callout = Callout("danger", "High likelihood / high impact", "Constant flipping between the two campaigns is causing customer-visible bugs.")
 \`\`\`
 
-A **decision** node body:
+A **decision** body (with rationale + alternative):
 
 \`\`\`
-root = Card([head, body])
+root = Card([head, why, alt])
 head = CardHeader("Postgres over MySQL")
-body = TextCallout("info", "Alternative weighed and rejected: MySQL.")
+why = TextContent("Window-function performance on Postgres is too valuable to give up.")
+alt = TextCallout("info", "Alternative weighed: MySQL (simpler ops).")
 \`\`\`
 
-A **metric** node body (single value):
+A **metric** body (single value):
 
 \`\`\`
 root = Card([head, val, sub])
@@ -83,17 +95,39 @@ val = TextContent("180ms", "x-large-heavy")
 sub = TextContent("Target: 200ms", "small")
 \`\`\`
 
-An **event** node body:
+A **metric** body with a series:
 
 \`\`\`
-root = Card([head, sub])
+root = Card([head, chart])
+head = CardHeader("Weekly active users")
+chart = LineChart(["Wk 1", "Wk 2", "Wk 3", "Wk 4"], [series1])
+series1 = Series("WAU", [12400, 13100, 13900, 14600])
+\`\`\`
+
+An **event** body:
+
+\`\`\`
+root = Card([head, body])
 head = CardHeader("Postgres migration ship", "Friday EOD")
-sub = TextContent("Cuts over the staging DB to the new primary.")
+body = TextContent("Cuts over the staging DB to the new primary.")
+\`\`\`
+
+An **event** body with tags:
+
+\`\`\`
+root = Card([head, body, tags])
+head = CardHeader("AI focus group", "2026-04-12")
+body = TextContent("Cross-team review of the intelligence backlog.")
+tags = TagBlock(["intelligence", "review"])
 \`\`\`
 
 ### What to do if you're unsure
 
-If a rich-type node truly has no extra substance worth visualizing (a bare \`decision\` with no rationale, a \`metric\` whose value wasn't stated), still emit a valid \`body\` — minimum is a Card with a CardHeader and one TextContent. Don't skip the body for required types.
+If a rich-type node truly has minimal substance (a bare \`decision\` with no rationale, an \`event\` with no date), still emit a valid body — minimum is a Card with a CardHeader and one TextContent. Don't skip the body for required types.
+
+### Reminder
+
+Body required: decision, risk, metric, event. **Body omitted: everything else.** Bodies on non-rich types are discarded.
 `;
 
 /**
