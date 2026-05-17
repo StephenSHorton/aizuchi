@@ -306,7 +306,10 @@ function MeetingPrototype() {
 								onPaneClick={onPaneClick}
 								onNodeHover={onNodeHover}
 							>
-								<NodeBodyLayer graph={session.graph} />
+								<NodeBodyLayer
+									graph={session.graph}
+									onNodeClick={onNodeClick}
+								/>
 								<div className="pointer-events-none absolute inset-0 z-20">
 									<div className="pointer-events-auto absolute top-2 left-2">
 										<MeetingStatusPanel
