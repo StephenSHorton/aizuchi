@@ -1,6 +1,8 @@
 mod audio;
 mod audio_import;
 mod cli_server;
+#[cfg(feature = "companion-pairing")]
+mod companion;
 mod meetings;
 mod network;
 mod transcript_import;
