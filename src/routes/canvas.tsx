@@ -757,24 +757,51 @@ function CanvasInner({ project }: { project: string }) {
 		);
 	}, [positions, setNodes]);
 
-	// ── camera: frame the board the instant cards are measured ───────────────
+	// ── camera: open centered on the content, then animate the zoom-out ──────
 	// The force sim takes ~2s to fully settle (alpha decay), and the settle-fit
 	// below waits for that — even when every node is pinned at a saved spot and
-	// the layout is final on the first frame. So fit ONCE the moment nodes are
-	// measured, with duration:0: a re-opened (pinned) board appears framed with
-	// no perceptible delay or second move. A fresh board frames its seed layout
-	// now and the settle-fit re-frames it once the sim spreads the nodes out.
+	// the layout is already final on the first frame. So frame the board the
+	// instant its cards are measured (fitView needs measured dims) rather than
+	// waiting. We center on the content's bounding-box center first (the same
+	// point fitView targets), then animate fitView to it: a smooth zoom-OUT
+	// from the middle of the board instead of a hard snap. A fresh board gets
+	// re-framed by the settle-fit once the sim spreads its nodes out.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: nodesInitialized is the trigger
 	useEffect(() => {
 		if (!nodesInitialized || didInitialFit.current) return;
 		if (userMovedViewport.current) return;
-		if (rf.getNodes().length === 0) return;
+		const ns = rf.getNodes();
+		if (ns.length === 0) return;
 		didInitialFit.current = true;
-		rf.fitView({
-			padding: 0.3,
-			maxZoom: FIT_MAX_ZOOM,
-			minZoom: FIT_MIN_ZOOM,
+		// Content bounding box → its center is where we open the camera.
+		let minX = Number.POSITIVE_INFINITY;
+		let minY = Number.POSITIVE_INFINITY;
+		let maxX = Number.NEGATIVE_INFINITY;
+		let maxY = Number.NEGATIVE_INFINITY;
+		for (const n of ns) {
+			const w = n.measured?.width ?? 0;
+			const h = n.measured?.height ?? 0;
+			minX = Math.min(minX, n.position.x);
+			minY = Math.min(minY, n.position.y);
+			maxX = Math.max(maxX, n.position.x + w);
+			maxY = Math.max(maxY, n.position.y + h);
+		}
+		// Open looking at the middle of the board at normal zoom...
+		rf.setCenter((minX + maxX) / 2, (minY + maxY) / 2, {
+			zoom: FIT_MAX_ZOOM,
 			duration: 0,
+		});
+		// ...then (next frame, so the center is committed) animate the pull-back
+		// to frame the whole board. A small/single-node board already fits at
+		// FIT_MAX_ZOOM, so this is a no-op move; a big board zooms smoothly out.
+		requestAnimationFrame(() => {
+			if (userMovedViewport.current) return;
+			rf.fitView({
+				padding: 0.3,
+				maxZoom: FIT_MAX_ZOOM,
+				minZoom: FIT_MIN_ZOOM,
+				duration: 600,
+			});
 		});
 	}, [nodesInitialized]);
 
