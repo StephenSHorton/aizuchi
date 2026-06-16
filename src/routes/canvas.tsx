@@ -91,6 +91,15 @@ type FlowNode = RFNode<CanvasNodeData, "canvas">;
 // Content-rich kinds open wider; work nodes (task/agent/…) stay compact.
 const MIN_NODE_WIDTH = 180;
 const MIN_NODE_HEIGHT = 60;
+
+// Auto fit-on-open zoom bounds. maxZoom keeps a sparse board from blowing up
+// to fill the viewport; minZoom is the "max zoom-out" floor — open a big board
+// and we fit/center as much as possible but never pull back past this, so cards
+// stay legible instead of becoming a field of dots. Only clamps the programmatic
+// open-fit; the ReactFlow minZoom={0.1} still lets the user pinch out further by
+// hand. Keep FIT_MIN_ZOOM < FIT_MAX_ZOOM or the floor silently collapses.
+const FIT_MIN_ZOOM = 0.35;
+const FIT_MAX_ZOOM = 1;
 function defaultWidth(kind: string): number {
 	return kind === "note" || kind === "richview" || kind === "list" ? 360 : 240;
 }
@@ -748,7 +757,12 @@ function CanvasInner({ project }: { project: string }) {
 	useEffect(() => {
 		if (settledAt === 0 || userMovedViewport.current) return;
 		if (rf.getNodes().length === 0) return;
-		rf.fitView({ padding: 0.3, maxZoom: 1, duration: 400 });
+		rf.fitView({
+			padding: 0.3,
+			maxZoom: FIT_MAX_ZOOM,
+			minZoom: FIT_MIN_ZOOM,
+			duration: 400,
+		});
 	}, [settledAt]);
 
 	// ── geometry persistence ─────────────────────────────────────────────────
