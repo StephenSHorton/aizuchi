@@ -95,6 +95,13 @@ type SimLink = SimulationLinkDatum<SimNode>;
 
 export type PositionMap = ReadonlyMap<string, { x: number; y: number }>;
 
+/**
+ * id → coordinate map for canvas pinning. `pins` freeze a node at a fixed
+ * coordinate (the sim flows other nodes around it — the drag-to-place model);
+ * `seedPositions` only set a node's INITIAL position (it stays free to move).
+ */
+export type PinMap = ReadonlyMap<string, { x: number; y: number }>;
+
 export interface ForceLayoutResult {
 	positions: PositionMap;
 	/**
@@ -281,6 +288,8 @@ function focusCollide(
 export function useForceLayout(
 	graph: Graph,
 	selectedId: string | null = null,
+	pins?: PinMap,
+	seedPositions?: PinMap,
 ): ForceLayoutResult {
 	const [positions, setPositions] = useState<PositionMap>(new Map());
 	const [settledAt, setSettledAt] = useState(0);
@@ -340,7 +349,12 @@ export function useForceLayout(
 			if (existing) {
 				node = existing;
 			} else {
-				const seed = seedPosition(n.id, graph, nodesRef.current);
+				// Prefer a pinned/saved coordinate so the canvas opens where
+				// the user left it; otherwise seed near connected neighbors.
+				const seed =
+					pins?.get(n.id) ??
+					seedPositions?.get(n.id) ??
+					seedPosition(n.id, graph, nodesRef.current);
 				node = { id: n.id, x: seed.x, y: seed.y };
 			}
 
@@ -368,6 +382,21 @@ export function useForceLayout(
 				}
 			}
 			next.set(n.id, node);
+		}
+
+		// User/saved pins win over focus/hub anchoring — a pinned node is
+		// frozen at its coordinate so the sim flows other nodes around it and
+		// the canvas's drag-to-place sticks.
+		if (pins) {
+			for (const [pid, p] of pins) {
+				const sn = next.get(pid);
+				if (sn) {
+					sn.fx = p.x;
+					sn.fy = p.y;
+					if (sn.x == null) sn.x = p.x;
+					if (sn.y == null) sn.y = p.y;
+				}
+			}
 		}
 		nodesRef.current = next;
 		const simNodes = [...next.values()];
@@ -491,7 +520,7 @@ export function useForceLayout(
 			simRef.current.force("buffer", buffer);
 			simRef.current.velocityDecay(VELOCITY_DECAY).alpha(alphaBump).restart();
 		}
-	}, [graph, selectedId]);
+	}, [graph, selectedId, pins, seedPositions]);
 
 	useEffect(() => {
 		return () => {

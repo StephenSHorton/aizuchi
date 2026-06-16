@@ -9,9 +9,15 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as CanvasRouteImport } from './routes/canvas'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MeetingIdRouteImport } from './routes/meeting.$id'
 
+const CanvasRoute = CanvasRouteImport.update({
+  id: '/canvas',
+  path: '/canvas',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -25,32 +31,43 @@ const MeetingIdRoute = MeetingIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/canvas': typeof CanvasRoute
   '/meeting/$id': typeof MeetingIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/canvas': typeof CanvasRoute
   '/meeting/$id': typeof MeetingIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/canvas': typeof CanvasRoute
   '/meeting/$id': typeof MeetingIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/meeting/$id'
+  fullPaths: '/' | '/canvas' | '/meeting/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/meeting/$id'
-  id: '__root__' | '/' | '/meeting/$id'
+  to: '/' | '/canvas' | '/meeting/$id'
+  id: '__root__' | '/' | '/canvas' | '/meeting/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CanvasRoute: typeof CanvasRoute
   MeetingIdRoute: typeof MeetingIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/canvas': {
+      id: '/canvas'
+      path: '/canvas'
+      fullPath: '/canvas'
+      preLoaderRoute: typeof CanvasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CanvasRoute: CanvasRoute,
   MeetingIdRoute: MeetingIdRoute,
 }
 export const routeTree = rootRouteImport

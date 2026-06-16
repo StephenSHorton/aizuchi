@@ -168,6 +168,31 @@ async fn route(
         (Method::POST, ["meetings", id, "open"]) => handlers::meetings::open(ctx, id).await,
         (_, ["meetings", _, "open"]) => Err(IpcError::MethodNotAllowed),
 
+        // ---- Projects (canvas board lifecycle) ----
+        (Method::GET, ["projects"]) => handlers::canvas::list_projects(ctx).await,
+        (_, ["projects"]) => Err(IpcError::MethodNotAllowed),
+
+        (Method::DELETE, ["projects", id]) => handlers::canvas::delete_project(ctx, id).await,
+        (_, ["projects", _]) => Err(IpcError::MethodNotAllowed),
+
+        // ---- Canvas (node-graph documents) ----
+        // The 3-segment effects arm is distinct by length from the 2-segment
+        // arms, so ordering between them is irrelevant; method order within a
+        // length matters and is handled by the trailing `_` fallbacks.
+        (Method::POST, ["canvas", id, "effects"]) => {
+            handlers::canvas::apply_effects(ctx, id, &body).await
+        }
+        (_, ["canvas", _, "effects"]) => Err(IpcError::MethodNotAllowed),
+
+        (Method::GET, ["canvas", id, "changes"]) => {
+            handlers::canvas::changes(ctx, id, query).await
+        }
+        (_, ["canvas", _, "changes"]) => Err(IpcError::MethodNotAllowed),
+
+        (Method::GET, ["canvas", id]) => handlers::canvas::get_canvas(ctx, id).await,
+        (Method::PUT, ["canvas", id]) => handlers::canvas::put_canvas(ctx, id, &body).await,
+        (_, ["canvas", _]) => Err(IpcError::MethodNotAllowed),
+
         // Anything else under /v1/ is a 404. Avoids leaking internal
         // routes via the method_not_allowed signal.
         _ => Err(IpcError::NotFound),

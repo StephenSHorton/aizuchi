@@ -55,12 +55,18 @@ import { z } from "zod";
 
 import {
 	AppNotRunningError,
+	AuthError,
+	ConflictError,
 	IpcClientError,
 	type MeetingMeta,
 	type MeetingSnapshot,
 	type Note,
 	NotFoundError,
 	AizuchiClient,
+	type CanvasDocument,
+	type CanvasEffect,
+	EdgeRelationSchema,
+	NodeKindSchema,
 } from "../../src/lib/cli-core";
 
 // ---------------------------------------------------------------------------
@@ -174,7 +180,8 @@ function log(msg: string): void {
 
 let cachedClient: AizuchiClient | null = null;
 
-async function getClient(): Promise<AizuchiClient> {
+async function getClient(rediscover = false): Promise<AizuchiClient> {
+	if (rediscover) cachedClient = null;
 	if (cachedClient) return cachedClient;
 	cachedClient = await AizuchiClient.create();
 	return cachedClient;
@@ -186,56 +193,73 @@ interface ToolError {
 }
 
 /**
- * Run an IPC-backed tool body. Wraps `AppNotRunningError` and other
- * `IpcClientError`s into MCP-friendly text responses; everything else
- * propagates so the SDK can surface it as a transport error.
+ * Errors that mean "the cached connection is stale" — the app likely
+ * restarted on a NEW ephemeral port, so the cached client points at a dead
+ * (or different) port. The fix for the long-standing "MCP sporadically
+ * breaks until you restart the session" bug: re-discover + retry once.
+ *
+ *  - AppNotRunningError → missing discovery files / ECONNREFUSED (dead port)
+ *  - network_error      → connect failed in a way that didn't normalize to
+ *                         AppNotRunningError (e.g. a new process on the old port)
+ *  - AuthError          → connected, but the token no longer matches (the app
+ *                         restarted and rotated nothing but the port; another
+ *                         instance grabbed the old port)
+ */
+function isReconnectable(err: unknown): boolean {
+	if (err instanceof AppNotRunningError) return true;
+	if (err instanceof AuthError) return true;
+	if (err instanceof IpcClientError && err.code === "network_error") return true;
+	return false;
+}
+
+function errText(text: string): ToolError {
+	return { content: [{ type: "text" as const, text }], isError: true };
+}
+
+function toToolError(err: unknown): ToolError {
+	if (err instanceof AppNotRunningError) {
+		return errText(
+			"Aizuchi app isn't running. Start it (open -a 'Aizuchi' or " +
+				"`bun tauri dev`) and retry.",
+		);
+	}
+	if (err instanceof ConflictError) {
+		// Per "surface, don't fix": tell the agent to re-read and retry rather
+		// than clobbering another agent's concurrent edit.
+		return errText(
+			`The board changed under you (${err.message}). Re-read it ` +
+				"(canvas_list / work_list) and retry.",
+		);
+	}
+	if (err instanceof NotFoundError) {
+		return errText(err.message || "Not found.");
+	}
+	if (err instanceof IpcClientError) {
+		return errText(`IPC error (${err.code}): ${err.message}`);
+	}
+	const message = err instanceof Error ? err.message : String(err);
+	return errText(`Error: ${message}`);
+}
+
+/**
+ * Run an IPC-backed tool body. On a reconnectable failure (a restarted app on
+ * a new port), transparently re-discover and retry ONCE before surfacing the
+ * error — so the agent never has to restart its MCP session.
  */
 async function withClient<T extends { content: { type: "text"; text: string }[] }>(
 	fn: (client: AizuchiClient) => Promise<T>,
 ): Promise<T | ToolError> {
 	try {
-		const client = await getClient();
-		return await fn(client);
+		return await fn(await getClient());
 	} catch (err) {
-		if (err instanceof AppNotRunningError) {
-			// Drop the cached client so a future attempt re-discovers.
-			cachedClient = null;
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text:
-							"Aizuchi app isn't running. Start it (open -a 'Aizuchi' " +
-							"or `bun tauri dev`) and retry.",
-					},
-				],
-				isError: true,
-			};
+		if (isReconnectable(err)) {
+			try {
+				return await fn(await getClient(true));
+			} catch (err2) {
+				return toToolError(err2);
+			}
 		}
-		if (err instanceof NotFoundError) {
-			return {
-				content: [
-					{ type: "text" as const, text: err.message || "Not found." },
-				],
-				isError: true,
-			};
-		}
-		if (err instanceof IpcClientError) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `IPC error (${err.code}): ${err.message}`,
-					},
-				],
-				isError: true,
-			};
-		}
-		const message = err instanceof Error ? err.message : String(err);
-		return {
-			content: [{ type: "text" as const, text: `Error: ${message}` }],
-			isError: true,
-		};
+		return toToolError(err);
 	}
 }
 
@@ -247,372 +271,6 @@ const server = new McpServer({
 	name: "aizuchi",
 	version: "1.0.0",
 });
-
-// =============================================================================
-// Pad CRUD — all routed through the IPC server.
-// =============================================================================
-
-server.tool(
-	"note_create",
-	"Create a new scratch pad note on the desktop. Supports markdown content. The note appears as a floating window the user can see. Do not repeat the title in the body — the title is displayed separately above the body. Set scope to share the note with peers on the network. Choose a width and height appropriate for the content: use wider notes for tables or code blocks, taller notes for long lists, and compact sizes for short messages. The default is 380x320.",
-	{
-		body: z
-			.string()
-			.describe(
-				"The note content (do not include the title here — it is shown separately)",
-			),
-		title: z
-			.string()
-			.optional()
-			.describe("Optional note title (displayed separately above the body)"),
-		color: z
-			.enum(["yellow", "pink", "blue", "green"])
-			.optional()
-			.default("yellow")
-			.describe("Note color (default: yellow)"),
-		width: z
-			.number()
-			.optional()
-			.describe(
-				"Window width in pixels. Choose based on content — e.g. 300 for short messages, 500+ for tables or code. Default: 380",
-			),
-		height: z
-			.number()
-			.optional()
-			.describe(
-				"Window height in pixels. Choose based on content — e.g. 200 for brief notes, 400+ for long lists. Default: 320",
-			),
-		ttl: z
-			.number()
-			.optional()
-			.describe("Hours until the note auto-expires"),
-		scope: z
-			.enum(["local", "team"])
-			.or(z.string())
-			.optional()
-			.default("local")
-			.describe(
-				"Sharing scope: 'local' (default, no sharing), 'team' (share with all peers), or a named group",
-			),
-		intent: z
-			.enum(["decision", "question", "context", "handoff", "fyi"])
-			.optional()
-			.default("fyi")
-			.describe("Note intent when sharing (default: fyi)"),
-	},
-	async ({ body, title, color, width, height, ttl, scope, intent }) =>
-		withClient(async (client) => {
-			log(
-				`note_create: "${title || "(untitled)"}" [${color}] ${
-					width || 380
-				}x${height || 320} scope=${scope}`,
-			);
-			const note = await client.createPad({
-				body,
-				title,
-				color,
-				width,
-				height,
-				ttlHours: ttl,
-				scope,
-				intent,
-			});
-
-			// Sharing routing isn't on the IPC contract yet — keep the
-			// existing signal-file channel for the multiplayer flow.
-			if (scope && scope !== "local") {
-				writeSignalFile(`.share-${note.id}`, { scope, intent });
-			}
-
-			const shared =
-				scope && scope !== "local" ? ` | Shared to ${scope} [${intent}]` : "";
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Created note ${note.id}${
-							note.title ? ` ("${note.title}")` : ""
-						} [${note.color}]${shared}`,
-					},
-				],
-			};
-		}),
-);
-
-server.tool(
-	"note_list",
-	"List all active scratch pad notes (local and network) with their full content",
-	{},
-	async () =>
-		withClient(async (client) => {
-			log("note_list");
-			const local = await client.listPads();
-
-			let text = "";
-			if (local.length === 0) {
-				text = "No active local notes.";
-			} else {
-				const lines = local.map((n) => formatNoteListEntry(n));
-				text = `${local.length} active note(s):\n\n${lines.join(
-					"\n\n---\n\n",
-				)}`;
-			}
-
-			// Remote notes still come from the disk — peer notes aren't on
-			// the IPC contract yet.
-			const remoteNotes = readRemoteNotes();
-			if (remoteNotes.length > 0) {
-				text += `\n\n## Network Notes (${remoteNotes.length})\n\n`;
-				for (const rn of remoteNotes) {
-					const age = formatAge(rn.timestamp);
-					text += `### [${rn.intent}] from ${rn.sender} (${age})\n`;
-					if (rn.title) text += `**${rn.title}**\n`;
-					text += `${rn.body}\n`;
-					text += `ID: ${rn.id} | Scope: ${rn.scope} | TTL: ${
-						rn.ttl === 0 ? "session" : `${rn.ttl}s`
-					}\n\n`;
-				}
-			} else {
-				text += `\n\n## Network Notes\n\nNo network notes available.`;
-			}
-
-			return { content: [{ type: "text" as const, text }] };
-		}),
-);
-
-function formatNoteListEntry(n: Note): string {
-	const parts = [`## ${n.title || "(untitled)"} [${n.color}]`, `ID: ${n.id}`];
-	parts.push(`Created: ${new Date(n.createdAt).toLocaleString()}`);
-	if (n.expiresAt) {
-		parts.push(`Expires: ${new Date(n.expiresAt).toLocaleString()}`);
-	}
-	if (n.position) {
-		parts.push(`Position: (${n.position.x}, ${n.position.y})`);
-	}
-	if (n.size) {
-		parts.push(`Size: ${n.size.width}x${n.size.height}`);
-	}
-	parts.push("", n.body);
-	return parts.join("\n");
-}
-
-server.tool(
-	"note_read",
-	"Read the full content of a specific scratch pad note by ID",
-	{
-		id: z.string().describe("The ID of the note to read"),
-	},
-	async ({ id }) =>
-		withClient(async (client) => {
-			log(`note_read: ${id}`);
-			try {
-				const note = await client.getPad(id);
-				const titleLine = note.title ? `# ${note.title}\n\n` : "";
-				const meta = `[${note.color}] Created: ${new Date(
-					note.createdAt,
-				).toLocaleString()}`;
-				const expires = note.expiresAt
-					? ` | Expires: ${new Date(note.expiresAt).toLocaleString()}`
-					: "";
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `${titleLine}${note.body}\n\n---\n${meta}${expires}\nID: ${note.id}`,
-						},
-					],
-				};
-			} catch (err) {
-				if (err instanceof NotFoundError) {
-					// Try remote notes — peer notes aren't on the IPC contract.
-					const remoteNote = readRemoteNotes().find((n) => n.id === id);
-					if (remoteNote) {
-						let text = "";
-						if (remoteNote.title) text += `# ${remoteNote.title}\n\n`;
-						text += remoteNote.body;
-						text += `\n\n---\nFrom: ${remoteNote.sender} | Intent: ${remoteNote.intent} | Scope: ${remoteNote.scope}`;
-						text += `\nReceived: ${formatAge(
-							remoteNote.timestamp,
-						)} | TTL: ${
-							remoteNote.ttl === 0 ? "session" : `${remoteNote.ttl}s`
-						}`;
-						text += `\nID: ${remoteNote.id}`;
-						return { content: [{ type: "text" as const, text }] };
-					}
-					return {
-						content: [
-							{ type: "text" as const, text: `Note ${id} not found.` },
-						],
-					};
-				}
-				throw err;
-			}
-		}),
-);
-
-server.tool(
-	"note_update",
-	"Update an existing scratch pad note — change its body, title, or color",
-	{
-		id: z.string().describe("The ID of the note to update"),
-		body: z.string().optional().describe("New body content (replaces existing)"),
-		title: z.string().optional().describe("New title (replaces existing)"),
-		color: z
-			.enum(["yellow", "pink", "blue", "green"])
-			.optional()
-			.describe("New color"),
-	},
-	async ({ id, body, title, color }) =>
-		withClient(async (client) => {
-			log(`note_update: ${id}`);
-			const patch: { body?: string; title?: string; color?: string } = {};
-			if (body !== undefined) patch.body = body;
-			if (title !== undefined) patch.title = title;
-			if (color !== undefined) patch.color = color;
-			if (Object.keys(patch).length === 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "Nothing to update — pass body, title, or color.",
-						},
-					],
-				};
-			}
-			const note = await client.updatePad(id, patch);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Updated note ${note.id}${
-							note.title ? ` ("${note.title}")` : ""
-						}`,
-					},
-				],
-			};
-		}),
-);
-
-server.tool(
-	"note_move",
-	"Move a scratch pad note to a specific screen position",
-	{
-		id: z.string().describe("The ID of the note to move"),
-		x: z.number().describe("X position in screen pixels"),
-		y: z.number().describe("Y position in screen pixels"),
-	},
-	async ({ id, x, y }) =>
-		withClient(async (client) => {
-			log(`note_move: ${id} to (${x}, ${y})`);
-			await client.updatePad(id, { position: { x, y } });
-			return {
-				content: [
-					{ type: "text" as const, text: `Moved note ${id} to (${x}, ${y})` },
-				],
-			};
-		}),
-);
-
-server.tool(
-	"note_resize",
-	"Resize a scratch pad note window",
-	{
-		id: z.string().describe("The ID of the note to resize"),
-		width: z.number().describe("Width in pixels"),
-		height: z.number().describe("Height in pixels"),
-	},
-	async ({ id, width, height }) =>
-		withClient(async (client) => {
-			log(`note_resize: ${id} to ${width}x${height}`);
-			await client.updatePad(id, { size: { width, height } });
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Resized note ${id} to ${width}x${height}`,
-					},
-				],
-			};
-		}),
-);
-
-server.tool(
-	"note_organize",
-	"Arrange all scratch pad notes in an optimal grid layout filling the screen. The app handles the actual layout using real screen dimensions.",
-	{},
-	async () =>
-		withClient(async (client) => {
-			log("note_organize");
-			const local = await client.listPads();
-			if (local.length === 0) {
-				return {
-					content: [{ type: "text" as const, text: "No notes to organize." }],
-				};
-			}
-
-			// Layout decision involves real screen dimensions, which the app
-			// owns. Signal it via .organize and let the file watcher route
-			// to organize_windows. (No IPC endpoint for this yet.)
-			writeSignalFile(".organize");
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Organizing ${local.length} note(s)`,
-					},
-				],
-			};
-		}),
-);
-
-server.tool(
-	"note_clear",
-	"Dismiss/delete one or all scratch pad notes",
-	{
-		id: z
-			.string()
-			.optional()
-			.describe("ID of a specific note to dismiss. Omit to clear ALL notes."),
-	},
-	async ({ id }) =>
-		withClient(async (client) => {
-			log(`note_clear: ${id || "all"}`);
-			if (id) {
-				try {
-					await client.deletePad(id);
-				} catch (err) {
-					if (err instanceof NotFoundError) {
-						return {
-							content: [
-								{ type: "text" as const, text: `Note ${id} not found.` },
-							],
-						};
-					}
-					throw err;
-				}
-				// Peer-side retract is signal-file-only for now.
-				writeSignalFile(`.retract-${id}`);
-				return {
-					content: [{ type: "text" as const, text: `Dismissed note ${id}.` }],
-				};
-			}
-
-			// Clear all — list and delete each. Emit retract signals so peers
-			// can drop them client-side.
-			const all = await client.listPads({ include: "hidden" });
-			for (const note of all) {
-				writeSignalFile(`.retract-${note.id}`);
-				try {
-					await client.deletePad(note.id);
-				} catch (err) {
-					if (!(err instanceof NotFoundError)) throw err;
-				}
-			}
-			return {
-				content: [{ type: "text" as const, text: "All notes cleared." }],
-			};
-		}),
-);
 
 // =============================================================================
 // Multiplayer / peer tools — direct FS for now (signal files + state
@@ -1557,6 +1215,394 @@ server.tool(
 					},
 				],
 			};
+		}),
+);
+
+// =============================================================================
+// Canvas — node-graph boards (scratch pad + agent-work) on one in-app canvas.
+//
+// These route through the IPC effect API (`POST /v1/canvas/:id/effects`). The
+// agent emits TOPOLOGY ONLY (nodes/edges) — node positions are owned by the
+// app's force layout and the user's drags, never by the agent. A node `id` is
+// an agent-chosen stable slug: reuse it to update, and two agents collaborate
+// on the same node by reusing the same id (no out-of-band handle needed).
+// The default board is `scratch-pad`; pass projectId `work` for the
+// agent-work graph (or any slug for a new board).
+// =============================================================================
+
+const DEFAULT_PROJECT = "scratch-pad";
+
+function txt(text: string) {
+	return { content: [{ type: "text" as const, text }] };
+}
+
+function formatCanvas(doc: CanvasDocument): string {
+	if (doc.nodes.length === 0 && doc.edges.length === 0) {
+		return `Canvas "${doc.projectId}" is empty (v${doc.version}).`;
+	}
+	const nodeLines = doc.nodes.map((n) => {
+		const p = n.payload as Record<string, unknown>;
+		const label =
+			(p.title as string) ??
+			(p.label as string) ??
+			(p.text as string) ??
+			"";
+		const status = p.status ? ` (${p.status})` : "";
+		return `- [${n.nodeType}] ${n.id}${label ? `: ${label}` : ""}${status}`;
+	});
+	const edgeLines = doc.edges.map(
+		(e) => `- ${e.from} --${e.relation}--> ${e.to}`,
+	);
+	let out = `Canvas "${doc.projectId}" (v${doc.version}) — ${doc.nodes.length} node(s), ${doc.edges.length} edge(s)\n\n## Nodes\n${nodeLines.join("\n")}`;
+	if (edgeLines.length > 0) out += `\n\n## Edges\n${edgeLines.join("\n")}`;
+	return out;
+}
+
+server.tool(
+	"canvas_add_node",
+	"Add (or update, by reusing the id) a node on the shared in-app canvas. Use a stable snake_case slug id you can reuse later and share with other agents. The `kind` selects the node shape; fill `payload` with the fields for that kind: note → {title?, markdown}; topic → {label}; list → {title?, items[]}; task → {title, status: pending|in_progress|blocked|done|failed, detail?}; agent → {label, agentId?, cwd?, gitBranch?}; artifact → {label, artifactType: file|pr|diff|commit|output|url, ref?}; finding → {text, severity?}; blocker → {label, reason?}; milestone → {label, status?}; decision → {label, detail?, alternative?}. Do NOT set positions — the canvas lays nodes out automatically.",
+	{
+		projectId: z
+			.string()
+			.optional()
+			.describe(
+				"Board to write to. Default 'scratch-pad' (collaborative notes); use 'work' for the agent-work graph.",
+			),
+		id: z
+			.string()
+			.regex(/^[a-z0-9][a-z0-9_-]*$/)
+			.describe("Stable slug id (e.g. 'auth_design'). Reuse to update; share across agents to collaborate."),
+		kind: NodeKindSchema.describe("Node kind — see the per-kind payload fields in the tool description."),
+		payload: z
+			.record(z.string(), z.any())
+			.describe("Per-kind content fields (see the tool description)."),
+	},
+	async ({ projectId, id, kind, payload }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_add_node: ${project}/${id} [${kind}]`);
+			const effects: CanvasEffect[] = [
+				{ op: "add", node: { id, nodeType: kind, payload: payload ?? {} } },
+			];
+			const ack = await client.applyEffects(project, effects);
+			return txt(`Added ${kind} node "${id}" to ${project} (canvas now at v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"canvas_connect",
+	"Draw a directed, typed edge between two existing canvas nodes (reference them by their slug ids). Use this to express structure: depends_on / blocks / part_of / supports / causes / owns (agent→task) / assigned_to / produces (agent→artifact) / relates_to, etc.",
+	{
+		projectId: z.string().optional().describe("Board (default 'scratch-pad')."),
+		id: z.string().describe("Stable slug id for this edge (reuse to re-style/retarget)."),
+		from: z.string().describe("Source node id."),
+		to: z.string().describe("Target node id."),
+		relation: EdgeRelationSchema.describe("Edge relation — drives color + layout clustering."),
+		label: z.string().optional().describe("Optional override label for the edge."),
+		animated: z.boolean().optional().describe("Animate the edge (a moving dot)."),
+	},
+	async ({ projectId, id, from, to, relation, label, animated }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_connect: ${project}/${from} --${relation}--> ${to}`);
+			const effects: CanvasEffect[] = [
+				{ op: "connect", edge: { id, from, to, relation, label, animated } },
+			];
+			const ack = await client.applyEffects(project, effects);
+			return txt(`Connected ${from} --${relation}--> ${to} (canvas now at v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"canvas_update_node",
+	"Merge new fields into an existing node's payload (e.g. mark a task done with {status:'done'}, or rewrite a note's {markdown}). Only the keys you pass are changed.",
+	{
+		projectId: z.string().optional().describe("Board (default 'scratch-pad')."),
+		id: z.string().describe("Id of the node to update."),
+		payload: z
+			.record(z.string(), z.any())
+			.describe("Fields to merge into the node's payload."),
+	},
+	async ({ projectId, id, payload }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_update_node: ${project}/${id}`);
+			const effects: CanvasEffect[] = [{ op: "update", id, payload: payload ?? {} }];
+			const ack = await client.applyEffects(project, effects);
+			return txt(`Updated node "${id}" (canvas now at v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"canvas_remove_node",
+	"Remove a node from the canvas. Any edges touching it are removed too.",
+	{
+		projectId: z.string().optional().describe("Board (default 'scratch-pad')."),
+		id: z.string().describe("Id of the node to remove."),
+	},
+	async ({ projectId, id }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_remove_node: ${project}/${id}`);
+			const effects: CanvasEffect[] = [{ op: "remove", id }];
+			const ack = await client.applyEffects(project, effects);
+			return txt(`Removed node "${id}" (canvas now at v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"canvas_list",
+	"Read back the current canvas — every node (id, kind, title/label, status) and edge. Call this before adding nodes so you reuse existing ids instead of duplicating, and to see what other agents have added.",
+	{
+		projectId: z.string().optional().describe("Board to read (default 'scratch-pad')."),
+	},
+	async ({ projectId }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_list: ${project}`);
+			const doc = await client.getCanvas(project);
+			return txt(formatCanvas(doc));
+		}),
+);
+
+server.tool(
+	"canvas_clear",
+	"Remove ALL nodes and edges from a canvas board. Destructive — use sparingly.",
+	{
+		projectId: z.string().optional().describe("Board to clear (default 'scratch-pad')."),
+	},
+	async ({ projectId }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_clear: ${project}`);
+			const ack = await client.applyEffects(project, [{ op: "clear" }]);
+			return txt(`Cleared canvas "${project}" (now at v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"canvas_observe",
+	"Wait (long-poll, up to ~25s) until a board changes past a version you pass — react to other agents' edits without busy-polling. Pass the `version` from canvas_list/work_list; on changed:true, re-list to see what's new, then observe again with the new version to keep watching.",
+	{
+		projectId: z
+			.string()
+			.optional()
+			.describe("Board to watch (default 'scratch-pad'; use 'work' for the agent-work graph)."),
+		since: z
+			.number()
+			.int()
+			.describe("The version you last saw (from canvas_list / work_list)."),
+	},
+	async ({ projectId, since }) =>
+		withClient(async (client) => {
+			const project = projectId ?? DEFAULT_PROJECT;
+			log(`canvas_observe: ${project} since v${since}`);
+			const res = await client.changesSince(project, since);
+			return txt(
+				res.changed
+					? `Board "${project}" changed — now at v${res.version}. Re-read it to see what's new.`
+					: `No change to "${project}" (still v${res.version}). Observe again to keep watching.`,
+			);
+		}),
+);
+
+// =============================================================================
+// Agent-work graph — convenience tools over the `work` canvas board. These let
+// an agent narrate its work as a live node graph ("I'm starting X", "X is
+// done", "agent A owns X", "X is blocked by Y") that the user watches in the
+// Work Graph window. Multiple agents collaborate on one graph by reusing ids.
+// =============================================================================
+
+const WORK_PROJECT = "work";
+
+function agentId(name: string): string {
+	return `agent_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+}
+
+server.tool(
+	"work_start",
+	"Declare that work on a task has started — adds (or updates) a task node on the agent-work graph with status in_progress. Reuse the same id later to update or complete it. Optionally name the agent doing the work to draw an 'owns' link.",
+	{
+		id: z
+			.string()
+			.regex(/^[a-z0-9][a-z0-9_-]*$/)
+			.describe("Stable slug for this task (reuse to update/complete)."),
+		title: z.string().describe("Short task title."),
+		detail: z.string().optional().describe("Optional longer description."),
+		agent: z
+			.string()
+			.optional()
+			.describe("Name of the agent doing the work (draws an 'owns' edge)."),
+	},
+	async ({ id, title, detail, agent }) =>
+		withClient(async (client) => {
+			log(`work_start: ${id} (${title})`);
+			const effects: CanvasEffect[] = [
+				{
+					op: "add",
+					node: {
+						id,
+						nodeType: "task",
+						payload: { title, status: "in_progress", ...(detail ? { detail } : {}) },
+					},
+				},
+			];
+			if (agent) {
+				const aid = agentId(agent);
+				effects.push({
+					op: "add",
+					node: { id: aid, nodeType: "agent", payload: { label: agent } },
+				});
+				effects.push({
+					op: "connect",
+					edge: { id: `${aid}__owns__${id}`, from: aid, to: id, relation: "owns" },
+				});
+			}
+			const ack = await client.applyEffects(WORK_PROJECT, effects);
+			return txt(`Started task "${id}" (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_status",
+	"Update a task's status on the agent-work graph (todo→in_progress→blocked→done, or failed).",
+	{
+		id: z.string().describe("Task id."),
+		status: z
+			.enum(["pending", "in_progress", "blocked", "done", "failed"])
+			.describe("New status."),
+	},
+	async ({ id, status }) =>
+		withClient(async (client) => {
+			log(`work_status: ${id} -> ${status}`);
+			const ack = await client.applyEffects(WORK_PROJECT, [
+				{ op: "update", id, payload: { status } },
+			]);
+			return txt(`Task "${id}" → ${status} (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_done",
+	"Mark a task complete on the agent-work graph (status done).",
+	{ id: z.string().describe("Task id.") },
+	async ({ id }) =>
+		withClient(async (client) => {
+			log(`work_done: ${id}`);
+			const ack = await client.applyEffects(WORK_PROJECT, [
+				{ op: "update", id, payload: { status: "done" } },
+			]);
+			return txt(`Task "${id}" done (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_link",
+	"Draw a typed dependency between two work items on the agent-work graph: depends_on, blocks, part_of, precedes, or relates_to.",
+	{
+		from: z.string().describe("Source task/item id."),
+		to: z.string().describe("Target task/item id."),
+		relation: z
+			.enum(["depends_on", "blocks", "part_of", "precedes", "relates_to"])
+			.describe("Relationship from → to."),
+	},
+	async ({ from, to, relation }) =>
+		withClient(async (client) => {
+			log(`work_link: ${from} --${relation}--> ${to}`);
+			const ack = await client.applyEffects(WORK_PROJECT, [
+				{
+					op: "connect",
+					edge: { id: `${from}__${relation}__${to}`, from, to, relation },
+				},
+			]);
+			return txt(`${from} --${relation}--> ${to} (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_blocked_by",
+	"Record that a task is blocked — adds a blocker node, a 'blocks' edge to the task, and sets the task status to blocked.",
+	{
+		taskId: z.string().describe("The blocked task's id."),
+		blockerId: z
+			.string()
+			.regex(/^[a-z0-9][a-z0-9_-]*$/)
+			.describe("Stable slug for the blocker."),
+		reason: z.string().describe("What's blocking it."),
+	},
+	async ({ taskId, blockerId, reason }) =>
+		withClient(async (client) => {
+			log(`work_blocked_by: ${taskId} <- ${blockerId}`);
+			const ack = await client.applyEffects(WORK_PROJECT, [
+				{
+					op: "add",
+					node: { id: blockerId, nodeType: "blocker", payload: { label: reason, reason } },
+				},
+				{
+					op: "connect",
+					edge: {
+						id: `${blockerId}__blocks__${taskId}`,
+						from: blockerId,
+						to: taskId,
+						relation: "blocks",
+					},
+				},
+				{ op: "update", id: taskId, payload: { status: "blocked" } },
+			]);
+			return txt(`Task "${taskId}" blocked by "${blockerId}" (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_produced",
+	"Record an artifact an agent/task produced (a file, PR, diff, commit, or output) and link it with a 'produces' edge.",
+	{
+		fromId: z.string().describe("The agent or task id that produced it."),
+		artifactId: z
+			.string()
+			.regex(/^[a-z0-9][a-z0-9_-]*$/)
+			.describe("Stable slug for the artifact."),
+		label: z.string().describe("Artifact label (e.g. PR title, filename)."),
+		artifactType: z
+			.enum(["file", "pr", "diff", "commit", "output", "url"])
+			.describe("Artifact kind."),
+		ref: z.string().optional().describe("Path / URL / sha."),
+	},
+	async ({ fromId, artifactId, label, artifactType, ref }) =>
+		withClient(async (client) => {
+			log(`work_produced: ${fromId} -> ${artifactId}`);
+			const ack = await client.applyEffects(WORK_PROJECT, [
+				{
+					op: "add",
+					node: {
+						id: artifactId,
+						nodeType: "artifact",
+						payload: { label, artifactType, ...(ref ? { ref } : {}) },
+					},
+				},
+				{
+					op: "connect",
+					edge: {
+						id: `${fromId}__produces__${artifactId}`,
+						from: fromId,
+						to: artifactId,
+						relation: "produces",
+					},
+				},
+			]);
+			return txt(`Recorded artifact "${artifactId}" (work graph v${ack.version}).`);
+		}),
+);
+
+server.tool(
+	"work_list",
+	"Read back the agent-work graph — every task (with status), agent, artifact, blocker, and the links between them. Call before adding so you reuse ids.",
+	{},
+	async () =>
+		withClient(async (client) => {
+			log("work_list");
+			const doc = await client.getCanvas(WORK_PROJECT);
+			return txt(formatCanvas(doc));
 		}),
 );
 

@@ -1,5 +1,8 @@
 mod audio;
 mod audio_import;
+mod canvas;
+mod canvas_commands;
+mod canvas_store;
 mod cli_server;
 mod meetings;
 mod network;
@@ -336,6 +339,92 @@ pub(crate) fn open_meeting_window_with_query(
     }
 }
 
+/// Open (or focus) the single persistent MAIN window — the home for the whole
+/// app now that sticky-note windows are retired. Loads the `/canvas` React
+/// route, which renders the board-switcher shell (Scratch Pad / Work / …) and
+/// talks to `CanvasStore` via the `canvas_*` Tauri commands, live-updating on
+/// the `canvas:changed` event. Boards are switched IN-WINDOW (no per-board
+/// windows), so the app behaves like a normal one-window application.
+pub(crate) fn create_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        window.set_focus().ok();
+        return;
+    }
+    let (sw, sh, sx, sy) = match app.primary_monitor() {
+        Ok(Some(m)) => {
+            let size = m.size();
+            let pos = m.position();
+            let scale = m.scale_factor();
+            (
+                size.width as f64 / scale,
+                size.height as f64 / scale,
+                pos.x as f64 / scale,
+                pos.y as f64 / scale,
+            )
+        }
+        _ => (1440.0, 900.0, 0.0, 0.0),
+    };
+    let window_w = (sw * 0.82).clamp(900.0, 1700.0);
+    let window_h = (sh * 0.85).clamp(640.0, 1040.0);
+    let x = sx + (sw - window_w) / 2.0;
+    let y = sy + (sh - window_h) / 2.0;
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("canvas".into()))
+        .title("Aizuchi")
+        .inner_size(window_w, window_h)
+        .position(x, y)
+        .build()
+        .ok();
+}
+
+/// One-time import of legacy sticky notes into the canvas `scratch-pad`
+/// board. Runs only when the board file doesn't exist yet, so it's
+/// idempotent across launches. Each non-hidden note becomes a `note` node;
+/// its saved window position carries over as the node's canvas coordinate
+/// (and pins it so a force layout won't move it).
+fn migrate_notes_to_canvas(notes: &[Note]) {
+    let base = notes_dir();
+    if matches!(canvas::read_document(&base, "scratch-pad"), Ok(Some(_))) {
+        return; // already migrated / board exists
+    }
+    let visible: Vec<&Note> = notes.iter().filter(|n| !n.hidden).collect();
+    if visible.is_empty() {
+        return;
+    }
+    let mut doc = canvas::CanvasDocument::empty("scratch-pad", "scratch_pad", "Scratch Pad");
+    for n in &visible {
+        let mut payload = serde_json::Map::new();
+        if let Some(t) = &n.title {
+            payload.insert("title".into(), serde_json::Value::String(t.clone()));
+        }
+        payload.insert(
+            "markdown".into(),
+            serde_json::Value::String(n.body.clone()),
+        );
+        doc.nodes.push(canvas::CanvasNode {
+            id: n.id.clone(),
+            node_type: "note".to_string(),
+            payload: serde_json::Value::Object(payload),
+            user_meta: None,
+            created_by: None,
+        });
+        if let Some(pos) = &n.position {
+            doc.positions
+                .insert(n.id.clone(), canvas::CanvasPosition { x: pos.x, y: pos.y });
+            doc.pinned.push(n.id.clone());
+        }
+    }
+    doc.updated_at = Some(chrono::Utc::now().to_rfc3339());
+    match canvas::write_document(&base, &doc) {
+        Ok(()) => log(&format!(
+            "canvas migration: imported {} note(s) into the scratch-pad board",
+            doc.nodes.len()
+        )),
+        Err(e) => log(&format!("canvas migration failed: {e}")),
+    }
+}
+
 /// Build the palette webview hidden. Called eagerly from setup() so the
 /// build doesn't have to run from a tauri-command worker thread (which
 /// silently hangs in `builder.build()` on Windows for reasons we haven't
@@ -647,6 +736,7 @@ fn dispatch_action(
         let state = app.state::<NotesState>();
         match id.as_str() {
             "new_pad" => create_blank_note(),
+            "open_canvas" | "open_work_graph" => create_main_window(&app),
             "organize" => organize_windows(&app, &state),
             "show_logs" => open_logs_window(&app),
             "lobby" => open_lobby_window(&app),
@@ -1387,7 +1477,18 @@ fn organize_windows(app: &AppHandle, state: &NotesState) {
     }
 }
 
+#[allow(unreachable_code)]
 fn create_note_window(app: &AppHandle, note: &Note, _index: usize) {
+    // Sticky-note windows are RETIRED (canvas re-architecture) — the in-app
+    // node canvas (`open_canvas_window`) is the home for notes now. This is the
+    // single kill switch: every path that used to spawn a note window (startup
+    // sync, the file watcher, app activation, show/restore) routes through here,
+    // so a no-op disables them all. The legacy note store + IPC/CLI commands
+    // remain functional (headless) for backward compatibility but never paint a
+    // window. Follow-up: excise the dormant note plumbing once the canvas has
+    // been runtime-proven (see project memory).
+    return;
+
     // Skip if a window with this label already exists
     if app.get_webview_window(&note.id).is_some() {
         return;
@@ -1647,6 +1748,7 @@ pub fn run() {
         })
         .manage(transcript_import::PendingImportsState::default())
         .manage(audio_import::AudioImportsState::default())
+        .manage(canvas_store::CanvasStore::new(notes_dir()))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -1697,6 +1799,10 @@ pub fn run() {
             import_audio_meeting_from_path,
             cancel_audio_import,
             log_from_frontend,
+            canvas_commands::canvas_get,
+            canvas_commands::canvas_list_projects,
+            canvas_commands::canvas_apply_effects,
+            canvas_commands::canvas_put,
         ])
         .setup(|app| {
             // macOS app menu bar. On Windows/Linux, an app menu attaches as a
@@ -1729,12 +1835,11 @@ pub fn run() {
                     "File",
                     true,
                     &[
-                        &MenuItem::with_id(app, "new_pad", "New Pad", true, Some("CmdOrCtrl+N"))?,
-                        &MenuItem::with_id(app, "organize", "Organize Pads", true, Some("CmdOrCtrl+Shift+O"))?,
+                        // Sticky-note menu items removed — single-window app now;
+                        // boards are switched inside the main window.
+                        &MenuItem::with_id(app, "open_canvas", "Show Aizuchi", true, Some("CmdOrCtrl+Shift+C"))?,
                         &PredefinedMenuItem::separator(app)?,
                         &MenuItem::with_id(app, "lobby", "Multiplayer...", true, Some("CmdOrCtrl+Shift+M"))?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &MenuItem::with_id(app, "clear_all", "Clear All Pads", true, None::<&str>)?,
                     ],
                 )?;
 
@@ -1787,6 +1892,9 @@ pub fn run() {
                         tauri::async_runtime::spawn(check_for_updates(h, false));
                     }
                     "show_logs" => open_logs_window(&handle),
+                    "open_canvas" | "tray_open_canvas" | "open_work_graph" => {
+                        create_main_window(&handle)
+                    }
                     "lobby" | "tray_lobby" => open_lobby_window(&handle),
                     "tray_aizuchi" => open_meeting_window(&handle, None),
                     "always_on_top" => {
@@ -1821,8 +1929,7 @@ pub fn run() {
             let tray_menu = Menu::with_items(
                 app,
                 &[
-                    &MenuItem::with_id(app, "tray_new_pad", "New Pad", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "tray_organize", "Organize Pads", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "tray_open_canvas", "Open Canvas", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "tray_lobby", "Multiplayer...", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -1847,34 +1954,17 @@ pub fn run() {
             // Sweep stale hidden pads (hidden + hiddenAt older than HIDDEN_TTL_DAYS)
             let notes = purge_stale_hidden(read_notes());
 
-            // Create a welcome note if no notes exist yet
-            if notes.is_empty() {
-                let welcome = Note {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    title: Some("Welcome to Aizuchi".to_string()),
-                    body: "Floating desktop notes for Claude Code.\n\n\
-                           **Quick start:**\n\
-                           - Double-click text to edit\n\
-                           - Drag anywhere to move\n\
-                           - Click \u{2715} to close (the pad is just hidden — bring it back via Cmd+K → Show hidden pads)\n\
-                           - To permanently delete, open the color picker and choose Delete pad\n\n\
-                           **Connect to Claude Code:**\n\
-                           ```\n\
-                           claude mcp add --transport stdio --scope user aizuchi -- \"/Applications/Aizuchi.app/Contents/MacOS/aizuchi-mcp\"\n\
-                           ```\n\n\
-                           Then restart Claude Code and say:\n\
-                           *\"Write that to a scratch pad\"*"
-                        .to_string(),
-                    color: "yellow".to_string(),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    expires_at: None,
-                    position: None,
-                    size: None,
-                    hidden: false,
-                    hidden_at: None,
-                };
-                write_notes(&[welcome]);
-            }
+            // One-time import of legacy sticky notes into the canvas
+            // `scratch-pad` board (canvas re-architecture). Idempotent — only
+            // runs when the board doesn't exist yet.
+            migrate_notes_to_canvas(&notes);
+
+            // (Sticky-note welcome seeding removed — sticky windows are retired;
+            // the canvas is the notes home. A fresh user gets an empty canvas.)
+
+            // Single-window app: open the persistent main window on launch so
+            // the app always presents a window (no more boot-to-empty-tray).
+            create_main_window(app.handle());
 
             // Initial sync + file watcher — delay slightly so the app is fully ready,
             // and start the watcher AFTER the initial sync to avoid races
@@ -2253,24 +2343,10 @@ pub fn run() {
                     if first_activation.swap(false, Ordering::Relaxed) {
                         return;
                     }
-                    log("App activated — raising all windows");
-                    let state = activation_handle.state::<NotesState>();
-                    let notes = read_notes();
-                    if notes.is_empty() {
-                        create_blank_note();
-                        sync_windows(&activation_handle, &state);
-                    } else {
-                        // Bring all note windows to front
-                        let note_ids: Vec<String> = {
-                            let locked = state.notes.lock().unwrap();
-                            locked.iter().map(|n| n.id.clone()).collect()
-                        };
-                        for id in &note_ids {
-                            if let Some(w) = activation_handle.get_webview_window(id) {
-                                w.set_focus().ok();
-                            }
-                        }
-                    }
+                    log("App activated — showing main window");
+                    // Single-window app: activating Aizuchi always presents the
+                    // main window (creating it if it was closed).
+                    create_main_window(&activation_handle);
                 });
 
                 unsafe {
@@ -2311,13 +2387,9 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
-                // Spotlight / dock icon click with no visible windows
-                let notes = read_notes();
-                if notes.is_empty() {
-                    create_blank_note();
-                    let state = _app_handle.state::<NotesState>();
-                    sync_windows(_app_handle, &state);
-                }
+                // Dock/Spotlight reopen (no visible windows) → bring the single
+                // main window back, creating it if it was closed.
+                create_main_window(_app_handle);
             }
             _ => {}
         }

@@ -6,6 +6,26 @@
  * from `@/lib/cli-core` only — never reach into individual modules.
  */
 
+export type {
+	AddNodeInput,
+	CanvasDocument,
+	CanvasEdge,
+	CanvasEffect,
+	CanvasNode,
+	EdgeRelation,
+	EffectsAck,
+	NodeKind,
+	ProjectMeta,
+	WorkStatus,
+} from "./canvas-schema";
+export {
+	AddNodeInputSchema,
+	CanvasDocumentSchema,
+	CanvasEffectSchema,
+	EdgeRelationSchema,
+	NodeKindSchema,
+	WorkStatusSchema,
+} from "./canvas-schema";
 export type { AizuchiClientOptions } from "./client";
 export { AizuchiClient } from "./client";
 export { defaultBaseDir, loadIpcConfig } from "./discovery";

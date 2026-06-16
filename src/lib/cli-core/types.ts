@@ -126,6 +126,27 @@ export interface ImportAudioMeetingInput {
 	path: string;
 }
 
+// ---------- Canvas ----------
+
+/**
+ * Canvas wire types are defined (with their zod validators) in
+ * `canvas-schema.ts` — the single source of truth shared by the client and
+ * the MCP server. Re-exported here so consumers can keep importing wire
+ * types from `cli-core/types`.
+ */
+export type {
+	CanvasDocument,
+	CanvasEdge,
+	CanvasEffect,
+	CanvasNode,
+	CanvasPosition,
+	EdgeRelation,
+	EffectsAck,
+	NodeKind,
+	ProjectMeta,
+	WorkStatus,
+} from "./canvas-schema";
+
 // ---------- Discovery ----------
 
 export interface IpcConfig {

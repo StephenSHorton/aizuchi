@@ -3,5 +3,6 @@
 //! `cli_server::routes::dispatch`.
 
 pub mod app;
+pub mod canvas;
 pub mod meetings;
 pub mod pads;

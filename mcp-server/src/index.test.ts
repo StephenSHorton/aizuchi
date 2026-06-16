@@ -124,15 +124,9 @@ describe("aizuchi MCP server", () => {
 		const names = tools.map((t) => t.name).sort();
 
 		const expected = [
-			// Pad CRUD (IPC-backed).
-			"note_create",
-			"note_list",
-			"note_read",
-			"note_update",
-			"note_move",
-			"note_resize",
-			"note_organize",
-			"note_clear",
+			// Pad CRUD removed — sticky windows retired; agents use the
+			// canvas_*/work_* tools below. (Block + highlight tools remain
+			// dormant pending a follow-up cleanup.)
 			// Block tools.
 			"block_list",
 			"block_highlight",
@@ -162,6 +156,22 @@ describe("aizuchi MCP server", () => {
 			"meeting_rename",
 			"meeting_delete",
 			"meeting_get",
+			// Canvas (node-graph boards — canvas re-architecture).
+			"canvas_add_node",
+			"canvas_connect",
+			"canvas_update_node",
+			"canvas_remove_node",
+			"canvas_list",
+			"canvas_clear",
+			"canvas_observe",
+			// Agent-work graph convenience tools.
+			"work_start",
+			"work_status",
+			"work_done",
+			"work_link",
+			"work_blocked_by",
+			"work_produced",
+			"work_list",
 		].sort();
 
 		expect(names).toEqual(expected);

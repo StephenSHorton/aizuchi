@@ -16,7 +16,10 @@ import { loadIpcConfig } from "./discovery";
 import { AppNotRunningError, errorFromServer, IpcClientError } from "./errors";
 import type {
 	AppStatus,
+	CanvasDocument,
+	CanvasEffect,
 	CreatePadInput,
+	EffectsAck,
 	ImportAudioMeetingInput,
 	ImportMeetingInput,
 	ImportMeetingResponse,
@@ -27,6 +30,7 @@ import type {
 	MeetingSnapshot,
 	Note,
 	PadPatch,
+	ProjectMeta,
 	RenameMeetingInput,
 	ResumeMeetingResponse,
 	StartMeetingResponse,
@@ -250,6 +254,75 @@ export class AizuchiClient {
 		return this.request<{ ok: true }>(
 			`/meetings/${encodeURIComponent(id)}/open`,
 			{ method: "POST" },
+		);
+	}
+
+	// =====================================================================
+	// Canvas (node-graph boards) — AIZ canvas re-architecture
+	// =====================================================================
+
+	/** `GET /v1/projects` — list canvas boards (meta only). */
+	listProjects(): Promise<ProjectMeta[]> {
+		return this.request<{ projects: ProjectMeta[] }>("/projects").then(
+			(r) => r.projects,
+		);
+	}
+
+	/** `DELETE /v1/projects/:id`. */
+	deleteProject(projectId: string): Promise<void> {
+		return this.request<void>(`/projects/${encodeURIComponent(projectId)}`, {
+			method: "DELETE",
+		});
+	}
+
+	/** `GET /v1/canvas/:id` — get-or-empty, so the canvas always loads. */
+	getCanvas(projectId: string): Promise<CanvasDocument> {
+		return this.request<CanvasDocument>(
+			`/canvas/${encodeURIComponent(projectId)}`,
+		);
+	}
+
+	/**
+	 * `PUT /v1/canvas/:id` — whole-document save with version compare-and-swap.
+	 * Throws `ConflictError` (409) if the document changed since `doc.version`
+	 * was read; the caller refetches + resaves (the app's geometry path is
+	 * last-write-wins) or surfaces the conflict (agents).
+	 */
+	putCanvas(projectId: string, doc: CanvasDocument): Promise<CanvasDocument> {
+		return this.request<CanvasDocument>(
+			`/canvas/${encodeURIComponent(projectId)}`,
+			{ method: "PUT", body: doc },
+		);
+	}
+
+	/**
+	 * `POST /v1/canvas/:id/effects` — the agent + canvas mutation path. Applies
+	 * a batch of topology effects under the server lock and bumps the version.
+	 */
+	applyEffects(
+		projectId: string,
+		effects: CanvasEffect[],
+		author?: string,
+	): Promise<EffectsAck> {
+		return this.request<EffectsAck>(
+			`/canvas/${encodeURIComponent(projectId)}/effects`,
+			{ method: "POST", body: { effects, author } },
+		);
+	}
+
+	/**
+	 * `GET /v1/canvas/:id/changes?since=N` — long-poll the observe channel.
+	 * Resolves when the board advances past `since` (`changed: true`) or after
+	 * the server's ~25s timeout (`changed: false`). Loop on the returned
+	 * version to watch other agents' edits without busy-polling.
+	 */
+	changesSince(
+		projectId: string,
+		since: number,
+	): Promise<{ version: number; changed: boolean }> {
+		return this.request<{ version: number; changed: boolean }>(
+			`/canvas/${encodeURIComponent(projectId)}/changes`,
+			{ query: { since: String(since) } },
 		);
 	}
 
