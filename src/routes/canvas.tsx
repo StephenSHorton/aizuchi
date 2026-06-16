@@ -20,6 +20,7 @@ import {
 	type Edge as RFEdge,
 	type Node as RFNode,
 	useEdgesState,
+	useNodesInitialized,
 	useNodesState,
 	useReactFlow,
 } from "@xyflow/react";
@@ -654,6 +655,7 @@ function CanvasInner({ project }: { project: string }) {
 	const draggingRef = useRef<Set<string>>(new Set());
 	const geometryDirty = useRef(false);
 	const userMovedViewport = useRef(false);
+	const didInitialFit = useRef(false);
 	const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const undoStack = useRef<CanvasDocument[]>([]);
 	const redoStack = useRef<CanvasDocument[]>([]);
@@ -676,6 +678,9 @@ function CanvasInner({ project }: { project: string }) {
 	);
 	const positionsRef = useRef(positions);
 	positionsRef.current = positions;
+	// Flips true once every visible card has been measured (xyflow needs
+	// measured dims for a correct fit) — the trigger for the instant open-fit.
+	const nodesInitialized = useNodesInitialized();
 
 	// ── load / reload ──────────────────────────────────────────────────────
 	const reload = useCallback(async () => {
@@ -752,7 +757,28 @@ function CanvasInner({ project }: { project: string }) {
 		);
 	}, [positions, setNodes]);
 
-	// ── camera: fit on settle until the user takes control ───────────────────
+	// ── camera: frame the board the instant cards are measured ───────────────
+	// The force sim takes ~2s to fully settle (alpha decay), and the settle-fit
+	// below waits for that — even when every node is pinned at a saved spot and
+	// the layout is final on the first frame. So fit ONCE the moment nodes are
+	// measured, with duration:0: a re-opened (pinned) board appears framed with
+	// no perceptible delay or second move. A fresh board frames its seed layout
+	// now and the settle-fit re-frames it once the sim spreads the nodes out.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: nodesInitialized is the trigger
+	useEffect(() => {
+		if (!nodesInitialized || didInitialFit.current) return;
+		if (userMovedViewport.current) return;
+		if (rf.getNodes().length === 0) return;
+		didInitialFit.current = true;
+		rf.fitView({
+			padding: 0.3,
+			maxZoom: FIT_MAX_ZOOM,
+			minZoom: FIT_MIN_ZOOM,
+			duration: 0,
+		});
+	}, [nodesInitialized]);
+
+	// ── camera: re-fit when the sim settles, until the user takes control ────
 	// biome-ignore lint/correctness/useExhaustiveDependencies: settledAt is the trigger
 	useEffect(() => {
 		if (settledAt === 0 || userMovedViewport.current) return;
