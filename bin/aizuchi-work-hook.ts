@@ -39,7 +39,12 @@ function hash(s: string): string {
 }
 
 function slug(s: string, n = 12): string {
-	return s.replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, n) || "x";
+	return (
+		s
+			.replace(/[^a-z0-9]/gi, "")
+			.toLowerCase()
+			.slice(0, n) || "x"
+	);
 }
 
 function basename(p: string | undefined): string {
@@ -105,7 +110,11 @@ async function buildEffects(
 			const status = STATUS_MAP[String(todo.status)] ?? "pending";
 			effects.push({
 				op: "add",
-				node: { id: taskId, nodeType: "task", payload: { title: content, status } },
+				node: {
+					id: taskId,
+					nodeType: "task",
+					payload: { title: content, status },
+				},
 			});
 			effects.push({
 				op: "connect",

@@ -54,19 +54,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import {
+	AizuchiClient,
 	AppNotRunningError,
 	AuthError,
+	type CanvasDocument,
+	type CanvasEffect,
 	ConflictError,
+	EdgeRelationSchema,
 	IpcClientError,
 	type MeetingMeta,
 	type MeetingSnapshot,
-	type Note,
-	NotFoundError,
-	AizuchiClient,
-	type CanvasDocument,
-	type CanvasEffect,
-	EdgeRelationSchema,
 	NodeKindSchema,
+	NotFoundError,
 } from "../../src/lib/cli-core";
 
 // ---------------------------------------------------------------------------
@@ -153,14 +152,6 @@ function writeHighlights(highlights: Record<string, HighlightValue>): void {
 	fs.writeFileSync(file, `${JSON.stringify(highlights, null, 2)}\n`, "utf-8");
 }
 
-function formatAge(timestampMs: number): string {
-	const seconds = Math.floor((Date.now() - timestampMs) / 1000);
-	if (seconds < 60) return "just now";
-	if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-	if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-	return `${Math.floor(seconds / 86400)}d ago`;
-}
-
 function log(msg: string): void {
 	const timestamp = new Date().toISOString().replace("T", " ").replace("Z", "");
 	const line = `[${timestamp}] [mcp] ${msg}\n`;
@@ -208,7 +199,8 @@ interface ToolError {
 function isReconnectable(err: unknown): boolean {
 	if (err instanceof AppNotRunningError) return true;
 	if (err instanceof AuthError) return true;
-	if (err instanceof IpcClientError && err.code === "network_error") return true;
+	if (err instanceof IpcClientError && err.code === "network_error")
+		return true;
 	return false;
 }
 
@@ -246,9 +238,9 @@ function toToolError(err: unknown): ToolError {
  * a new port), transparently re-discover and retry ONCE before surfacing the
  * error — so the agent never has to restart its MCP session.
  */
-async function withClient<T extends { content: { type: "text"; text: string }[] }>(
-	fn: (client: AizuchiClient) => Promise<T>,
-): Promise<T | ToolError> {
+async function withClient<
+	T extends { content: { type: "text"; text: string }[] },
+>(fn: (client: AizuchiClient) => Promise<T>): Promise<T | ToolError> {
 	try {
 		return await fn(await getClient());
 	} catch (err) {
@@ -357,11 +349,7 @@ server.tool(
 		}
 		if (scope) {
 			if (!subs.includes(scope)) subs.push(scope);
-			fs.writeFileSync(
-				subsFile,
-				`${JSON.stringify(subs, null, 2)}\n`,
-				"utf-8",
-			);
+			fs.writeFileSync(subsFile, `${JSON.stringify(subs, null, 2)}\n`, "utf-8");
 			return {
 				content: [
 					{
@@ -375,7 +363,10 @@ server.tool(
 		if (fs.existsSync(subsFile)) fs.unlinkSync(subsFile);
 		return {
 			content: [
-				{ type: "text" as const, text: "Subscribed to all scopes (no filtering)." },
+				{
+					type: "text" as const,
+					text: "Subscribed to all scopes (no filtering).",
+				},
 			],
 		};
 	},
@@ -430,7 +421,9 @@ server.tool(
 	"room_join",
 	"Join a multiplayer room using a room code from a teammate. Connects to their Aizuchi instance for real-time note sharing.",
 	{
-		code: z.string().describe("The room code from the host (e.g., XXXX-XXXX-XX)"),
+		code: z
+			.string()
+			.describe("The room code from the host (e.g., XXXX-XXXX-XX)"),
 	},
 	async ({ code }) => {
 		log(`room_join: ${code}`);
@@ -534,18 +527,13 @@ server.tool(
 	},
 );
 
-server.tool(
-	"log_close",
-	"Close the live log viewer window.",
-	{},
-	async () => {
-		log("log_close");
-		writeSignalFile(".close-logs");
-		return {
-			content: [{ type: "text" as const, text: "Log viewer closed." }],
-		};
-	},
-);
+server.tool("log_close", "Close the live log viewer window.", {}, async () => {
+	log("log_close");
+	writeSignalFile(".close-logs");
+	return {
+		content: [{ type: "text" as const, text: "Log viewer closed." }],
+	};
+});
 
 function readLogFile(): string {
 	const file = path.join(notesDir(), "aizuchi.log");
@@ -615,14 +603,18 @@ server.tool(
 		if (last_minutes) {
 			const cutoff = Date.now() - last_minutes * 60 * 1000;
 			allLines = allLines.filter((l) => {
-				const match = l.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/);
+				const match = l.match(
+					/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/,
+				);
 				if (!match) return false;
 				const ts = new Date(`${match[1].replace(" ", "T")}Z`).getTime();
 				return ts >= cutoff;
 			});
 		}
 		const lowerQuery = query.toLowerCase();
-		const matches = allLines.filter((l) => l.toLowerCase().includes(lowerQuery));
+		const matches = allLines.filter((l) =>
+			l.toLowerCase().includes(lowerQuery),
+		);
 		if (matches.length === 0) {
 			return {
 				content: [
@@ -740,7 +732,8 @@ function parseBlocks(body: string): Block[] {
 			const text = collected
 				.slice(
 					1,
-					collected[collected.length - 1] && isFence(collected[collected.length - 1])
+					collected[collected.length - 1] &&
+						isFence(collected[collected.length - 1])
 						? -1
 						: undefined,
 				)
@@ -1018,7 +1011,9 @@ function formatMeetingMeta(m: MeetingMeta): string {
 		m.endedAt && m.endedAt > 0
 			? formatDurationMs(m.endedAt - m.startedAt)
 			: formatDurationMs(Date.now() - m.startedAt);
-	const name = m.name ? ` "${m.name}"${m.nameLockedByUser ? " (locked)" : ""}` : "";
+	const name = m.name
+		? ` "${m.name}"${m.nameLockedByUser ? " (locked)" : ""}`
+		: "";
 	const parts = [`## ${m.id}${name} [${m.mode}]`];
 	parts.push(`Started: ${started}`);
 	parts.push(`Ended: ${ended}`);
@@ -1125,9 +1120,7 @@ server.tool(
 			const meetings = await client.listMeetings();
 			if (meetings.length === 0) {
 				return {
-					content: [
-						{ type: "text" as const, text: "No saved meetings." },
-					],
+					content: [{ type: "text" as const, text: "No saved meetings." }],
 				};
 			}
 			// Newest first.
@@ -1190,9 +1183,7 @@ server.tool(
 			log(`meeting_delete: ${id}`);
 			await client.deleteMeeting(id);
 			return {
-				content: [
-					{ type: "text" as const, text: `Deleted meeting ${id}.` },
-				],
+				content: [{ type: "text" as const, text: `Deleted meeting ${id}.` }],
 			};
 		}),
 );
@@ -1243,10 +1234,7 @@ function formatCanvas(doc: CanvasDocument): string {
 	const nodeLines = doc.nodes.map((n) => {
 		const p = n.payload as Record<string, unknown>;
 		const label =
-			(p.title as string) ??
-			(p.label as string) ??
-			(p.text as string) ??
-			"";
+			(p.title as string) ?? (p.label as string) ?? (p.text as string) ?? "";
 		const status = p.status ? ` (${p.status})` : "";
 		return `- [${n.nodeType}] ${n.id}${label ? `: ${label}` : ""}${status}`;
 	});
@@ -1271,8 +1259,12 @@ server.tool(
 		id: z
 			.string()
 			.regex(/^[a-z0-9][a-z0-9_-]*$/)
-			.describe("Stable slug id (e.g. 'auth_design'). Reuse to update; share across agents to collaborate."),
-		kind: NodeKindSchema.describe("Node kind — see the per-kind payload fields in the tool description."),
+			.describe(
+				"Stable slug id (e.g. 'auth_design'). Reuse to update; share across agents to collaborate.",
+			),
+		kind: NodeKindSchema.describe(
+			"Node kind — see the per-kind payload fields in the tool description.",
+		),
 		payload: z
 			.record(z.string(), z.any())
 			.describe("Per-kind content fields (see the tool description)."),
@@ -1285,7 +1277,9 @@ server.tool(
 				{ op: "add", node: { id, nodeType: kind, payload: payload ?? {} } },
 			];
 			const ack = await client.applyEffects(project, effects);
-			return txt(`Added ${kind} node "${id}" to ${project} (canvas now at v${ack.version}).`);
+			return txt(
+				`Added ${kind} node "${id}" to ${project} (canvas now at v${ack.version}).`,
+			);
 		}),
 );
 
@@ -1294,12 +1288,22 @@ server.tool(
 	"Draw a directed, typed edge between two existing canvas nodes (reference them by their slug ids). Use this to express structure: depends_on / blocks / part_of / supports / causes / owns (agent→task) / assigned_to / produces (agent→artifact) / relates_to, etc.",
 	{
 		projectId: z.string().optional().describe("Board (default 'scratch-pad')."),
-		id: z.string().describe("Stable slug id for this edge (reuse to re-style/retarget)."),
+		id: z
+			.string()
+			.describe("Stable slug id for this edge (reuse to re-style/retarget)."),
 		from: z.string().describe("Source node id."),
 		to: z.string().describe("Target node id."),
-		relation: EdgeRelationSchema.describe("Edge relation — drives color + layout clustering."),
-		label: z.string().optional().describe("Optional override label for the edge."),
-		animated: z.boolean().optional().describe("Animate the edge (a moving dot)."),
+		relation: EdgeRelationSchema.describe(
+			"Edge relation — drives color + layout clustering.",
+		),
+		label: z
+			.string()
+			.optional()
+			.describe("Optional override label for the edge."),
+		animated: z
+			.boolean()
+			.optional()
+			.describe("Animate the edge (a moving dot)."),
 	},
 	async ({ projectId, id, from, to, relation, label, animated }) =>
 		withClient(async (client) => {
@@ -1309,7 +1313,9 @@ server.tool(
 				{ op: "connect", edge: { id, from, to, relation, label, animated } },
 			];
 			const ack = await client.applyEffects(project, effects);
-			return txt(`Connected ${from} --${relation}--> ${to} (canvas now at v${ack.version}).`);
+			return txt(
+				`Connected ${from} --${relation}--> ${to} (canvas now at v${ack.version}).`,
+			);
 		}),
 );
 
@@ -1327,7 +1333,9 @@ server.tool(
 		withClient(async (client) => {
 			const project = projectId ?? DEFAULT_PROJECT;
 			log(`canvas_update_node: ${project}/${id}`);
-			const effects: CanvasEffect[] = [{ op: "update", id, payload: payload ?? {} }];
+			const effects: CanvasEffect[] = [
+				{ op: "update", id, payload: payload ?? {} },
+			];
 			const ack = await client.applyEffects(project, effects);
 			return txt(`Updated node "${id}" (canvas now at v${ack.version}).`);
 		}),
@@ -1354,7 +1362,10 @@ server.tool(
 	"canvas_list",
 	"Read back the current canvas — every node (id, kind, title/label, status) and edge. Call this before adding nodes so you reuse existing ids instead of duplicating, and to see what other agents have added.",
 	{
-		projectId: z.string().optional().describe("Board to read (default 'scratch-pad')."),
+		projectId: z
+			.string()
+			.optional()
+			.describe("Board to read (default 'scratch-pad')."),
 	},
 	async ({ projectId }) =>
 		withClient(async (client) => {
@@ -1367,16 +1378,17 @@ server.tool(
 
 server.tool(
 	"canvas_clear",
-	"Remove ALL nodes and edges from a canvas board. Destructive — use sparingly.",
+	"Remove ALL nodes and edges from a canvas board. Destructive and irreversible — the board id is REQUIRED (no default) so you never clear the wrong board by omission.",
 	{
-		projectId: z.string().optional().describe("Board to clear (default 'scratch-pad')."),
+		projectId: z
+			.string()
+			.describe("Board to clear — required, e.g. 'scratch-pad' or 'work'."),
 	},
 	async ({ projectId }) =>
 		withClient(async (client) => {
-			const project = projectId ?? DEFAULT_PROJECT;
-			log(`canvas_clear: ${project}`);
-			const ack = await client.applyEffects(project, [{ op: "clear" }]);
-			return txt(`Cleared canvas "${project}" (now at v${ack.version}).`);
+			log(`canvas_clear: ${projectId}`);
+			const ack = await client.applyEffects(projectId, [{ op: "clear" }]);
+			return txt(`Cleared canvas "${projectId}" (now at v${ack.version}).`);
 		}),
 );
 
@@ -1387,7 +1399,9 @@ server.tool(
 		projectId: z
 			.string()
 			.optional()
-			.describe("Board to watch (default 'scratch-pad'; use 'work' for the agent-work graph)."),
+			.describe(
+				"Board to watch (default 'scratch-pad'; use 'work' for the agent-work graph).",
+			),
 		since: z
 			.number()
 			.int()
@@ -1443,7 +1457,11 @@ server.tool(
 					node: {
 						id,
 						nodeType: "task",
-						payload: { title, status: "in_progress", ...(detail ? { detail } : {}) },
+						payload: {
+							title,
+							status: "in_progress",
+							...(detail ? { detail } : {}),
+						},
 					},
 				},
 			];
@@ -1455,7 +1473,12 @@ server.tool(
 				});
 				effects.push({
 					op: "connect",
-					edge: { id: `${aid}__owns__${id}`, from: aid, to: id, relation: "owns" },
+					edge: {
+						id: `${aid}__owns__${id}`,
+						from: aid,
+						to: id,
+						relation: "owns",
+					},
 				});
 			}
 			const ack = await client.applyEffects(WORK_PROJECT, effects);
@@ -1498,12 +1521,12 @@ server.tool(
 
 server.tool(
 	"work_link",
-	"Draw a typed dependency between two work items on the agent-work graph: depends_on, blocks, part_of, precedes, or relates_to.",
+	"Draw a typed dependency between two work items on the agent-work graph: depends_on, blocks, part_of, precedes, or related_to.",
 	{
 		from: z.string().describe("Source task/item id."),
 		to: z.string().describe("Target task/item id."),
 		relation: z
-			.enum(["depends_on", "blocks", "part_of", "precedes", "relates_to"])
+			.enum(["depends_on", "blocks", "part_of", "precedes", "related_to"])
 			.describe("Relationship from → to."),
 	},
 	async ({ from, to, relation }) =>
@@ -1515,7 +1538,9 @@ server.tool(
 					edge: { id: `${from}__${relation}__${to}`, from, to, relation },
 				},
 			]);
-			return txt(`${from} --${relation}--> ${to} (work graph v${ack.version}).`);
+			return txt(
+				`${from} --${relation}--> ${to} (work graph v${ack.version}).`,
+			);
 		}),
 );
 
@@ -1536,7 +1561,11 @@ server.tool(
 			const ack = await client.applyEffects(WORK_PROJECT, [
 				{
 					op: "add",
-					node: { id: blockerId, nodeType: "blocker", payload: { label: reason, reason } },
+					node: {
+						id: blockerId,
+						nodeType: "blocker",
+						payload: { label: reason, reason },
+					},
 				},
 				{
 					op: "connect",
@@ -1549,7 +1578,9 @@ server.tool(
 				},
 				{ op: "update", id: taskId, payload: { status: "blocked" } },
 			]);
-			return txt(`Task "${taskId}" blocked by "${blockerId}" (work graph v${ack.version}).`);
+			return txt(
+				`Task "${taskId}" blocked by "${blockerId}" (work graph v${ack.version}).`,
+			);
 		}),
 );
 
@@ -1590,7 +1621,9 @@ server.tool(
 					},
 				},
 			]);
-			return txt(`Recorded artifact "${artifactId}" (work graph v${ack.version}).`);
+			return txt(
+				`Recorded artifact "${artifactId}" (work graph v${ack.version}).`,
+			);
 		}),
 );
 
