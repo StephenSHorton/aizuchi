@@ -1,3 +1,4 @@
+import { mergeBodyPatch, validateBody } from "./body-merge";
 import type { ExtractionMode } from "./persistence";
 import type {
 	Edge,
@@ -6,6 +7,7 @@ import type {
 	GraphDiff,
 	Node,
 	NodeType,
+	NodeUpdate,
 } from "./schemas";
 
 /**
@@ -288,6 +290,70 @@ export interface NormalizeReport {
 	thrashGuardTriggered: boolean;
 	droppedVagueActionItems: number;
 	addedAssignedToEdges: number;
+	/** AIZ-60 / #119 — body patches that merged + validated cleanly. */
+	bodyPatchesApplied: number;
+	/**
+	 * AIZ-60 / #119 — body patches (or full-body replacements) that failed to
+	 * merge/validate and fell back to the node's last-known-good body.
+	 */
+	bodyPatchesFailed: number;
+}
+
+/**
+ * AIZ-60 / #119 — resolve `body_patch` (and validate full-body) fields on
+ * `update_nodes` into a concrete, validated `body` the downstream `applyDiff`
+ * can copy onto the node.
+ *
+ *   - `body_patch` present → merge it into the node's CURRENT body (ground
+ *     truth from `graph`) via OpenUI Lang's statement-name merge. On success
+ *     the update carries the merged body; on failure we fall back.
+ *   - full `body` present (wholesale replacement) → validate it; keep it only
+ *     if it parses cleanly.
+ *   - fallback / no valid new body → leave `body` undefined so `applyDiff`
+ *     preserves the existing body. We never synthesize a body on an update
+ *     (that would clobber a rich body on a status-only tweak) and never let a
+ *     malformed patch/body corrupt the node.
+ */
+function resolveBodyPatches(
+	graph: Graph,
+	updates: NodeUpdate[],
+): { updates: NodeUpdate[]; applied: number; failed: number } {
+	let applied = 0;
+	let failed = 0;
+	const bodyById = new Map<string, string | undefined>(
+		graph.nodes.map((n) => [n.id, n.body]),
+	);
+
+	const resolved = updates.map((u) => {
+		// Strip the patch from what flows downstream; `applyDiff` only reads
+		// `body`. `next.body` starts as whatever full body the model sent (if
+		// any) and is overwritten / cleared below.
+		const next: NodeUpdate = { ...u, body_patch: undefined };
+		const existing = bodyById.get(u.id);
+
+		if (u.body_patch !== undefined && u.body_patch.trim().length > 0) {
+			if (existing !== undefined && existing.trim().length > 0) {
+				const merged = mergeBodyPatch(existing, u.body_patch);
+				if (merged.ok) {
+					next.body = merged.body;
+					applied++;
+					return next;
+				}
+			}
+			// No ground-truth body to patch against, or the merge produced an
+			// invalid body — fall through to full-body-or-preserve.
+			failed++;
+		}
+
+		if (u.body !== undefined && u.body.trim().length > 0) {
+			next.body = validateBody(u.body).ok ? u.body : undefined;
+		}
+		// else: no body change requested → `next.body` is undefined →
+		// `applyDiff` keeps the node's existing body.
+		return next;
+	});
+
+	return { updates: resolved, applied, failed };
 }
 
 export interface NormalizeResult {
@@ -331,6 +397,8 @@ export function normalizeDiff(
 		thrashGuardTriggered: false,
 		droppedVagueActionItems: 0,
 		addedAssignedToEdges: 0,
+		bodyPatchesApplied: 0,
+		bodyPatchesFailed: 0,
 	};
 
 	if (diff.no_changes) {
@@ -531,6 +599,19 @@ export function normalizeDiff(
 		filteredEdges.push(e);
 	}
 
+	// AIZ-60 / #119 — resolve body patches on updates against the current
+	// graph. Runs before the return so the merged/validated body is what
+	// `applyDiff` copies onto the node. Note: updates are NOT run through
+	// `fillMissingBody` — a partial update (e.g. status flip) must not get a
+	// freshly-synthesized minimal body that clobbers the node's rich one.
+	const {
+		updates: patchedUpdateNodes,
+		applied: bodyPatchesApplied,
+		failed: bodyPatchesFailed,
+	} = resolveBodyPatches(graph, filteredUpdateNodes);
+	report.bodyPatchesApplied = bodyPatchesApplied;
+	report.bodyPatchesFailed = bodyPatchesFailed;
+
 	return {
 		diff: {
 			...diff,
@@ -538,7 +619,7 @@ export function normalizeDiff(
 				fillMissingBody,
 			),
 			add_edges: filteredEdges,
-			update_nodes: filteredUpdateNodes.map(fillMissingBody),
+			update_nodes: patchedUpdateNodes,
 			merge_nodes: filteredMerges,
 			remove_nodes: removeNodes,
 			remove_edges: removeEdges,

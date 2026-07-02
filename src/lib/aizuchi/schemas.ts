@@ -201,7 +201,23 @@ export const NodeUpdate = z.object({
 	dueDate: z.string().optional(),
 	tone: z.string().optional(),
 	alternative: z.string().optional(),
-	body: z.string().optional(),
+	body: z
+		.string()
+		.optional()
+		.describe(
+			"FULL replacement OpenUI Lang body — the entire new source. Use this only when the body is being rewritten wholesale. To make a small change to an existing rich node's body, prefer `body_patch` instead.",
+		),
+	// AIZ-60 / #119 — incremental editing. When refining an existing rich-type
+	// node's body, emit ONLY the changed/new OpenUI Lang statements here rather
+	// than the whole `body`. The merge (by statement name) happens in
+	// normalize.ts against the node's current body. See OPENUI_LANG_NODE_BODY's
+	// "Incremental editing" section for the patch rules.
+	body_patch: z
+		.string()
+		.optional()
+		.describe(
+			'PATCH for an existing rich node\'s body — only the OpenUI Lang statements that changed or are new (e.g. just `callout = Callout("danger", ...)`). Reuse the existing statement names exactly. Unmentioned statements are kept automatically. Do NOT resend the whole body. Ignored if the node has no existing body.',
+		),
 });
 export type NodeUpdate = z.infer<typeof NodeUpdate>;
 
@@ -371,6 +387,11 @@ export function applyDiff(graph: Graph, diff: GraphDiff): Graph {
 			...(u.dueDate !== undefined && { dueDate: u.dueDate }),
 			...(u.tone !== undefined && { tone: u.tone }),
 			...(u.alternative !== undefined && { alternative: u.alternative }),
+			// AIZ-60 / #119 — honor body changes on updates. `normalizeDiff`
+			// resolves any `body_patch` into a concrete merged `body` before this
+			// runs, so we only ever copy a full `body` here. When absent, the
+			// node keeps its existing (last-known-good) body.
+			...(u.body !== undefined && { body: u.body }),
 		});
 	}
 

@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	deleteSnapshot,
@@ -181,19 +183,35 @@ export function Palette() {
 		return (meetings ?? []).slice(0, RECENT_LIMIT);
 	}, [meetings]);
 
+	// Theme toggle (AIZ-54 / #113). The label is state-aware so the palette
+	// always offers the *other* theme. `resolvedTheme` is kept current across
+	// windows by the `ThemeSync` listener in main.tsx.
+	const { resolvedTheme, setTheme } = useTheme();
+	const themeAction = useMemo<Action>(() => {
+		const isDark = resolvedTheme === "dark";
+		return {
+			id: "toggle_theme",
+			label: isDark ? "Switch to light mode" : "Switch to dark mode",
+			description: isDark
+				? "Use the light color theme in every window"
+				: "Use the dark color theme in every window",
+		};
+	}, [resolvedTheme]);
+
 	const hasMeetings = (meetings ?? []).length > 0;
 	const filteredActions = useMemo(() => {
-		return ACTIONS.filter(
-			// Hide meeting-dependent actions when there's nothing to act on.
-			(a) =>
-				hasMeetings ||
-				(a.id !== "open_last_meeting" && a.id !== "browse_meetings"),
-		)
+		return [...ACTIONS, themeAction]
+			.filter(
+				// Hide meeting-dependent actions when there's nothing to act on.
+				(a) =>
+					hasMeetings ||
+					(a.id !== "open_last_meeting" && a.id !== "browse_meetings"),
+			)
 			.map((a) => ({ a, score: rank(query, a) }))
 			.filter((x) => x.score > 0)
 			.sort((x, y) => y.score - x.score)
 			.map((x) => x.a);
-	}, [query, hasMeetings]);
+	}, [query, hasMeetings, themeAction]);
 
 	// Main view items: actions first, then recent meetings (when no query).
 	const mainItems = useMemo<
@@ -369,6 +387,17 @@ export function Palette() {
 		if (id === "browse_meetings") {
 			setView("browse");
 			refreshMeetings();
+			return;
+		}
+		if (id === "toggle_theme") {
+			const next = resolvedTheme === "dark" ? "light" : "dark";
+			// Flip this window immediately, then broadcast so every other open
+			// window updates too. The palette is its own Tauri window and
+			// closes right after, so the broadcast (handled by ThemeSync in
+			// main.tsx) is what actually repaints the meeting/note windows.
+			setTheme(next);
+			emit("aizuchi:set-theme", next).catch(() => {});
+			beginClose();
 			return;
 		}
 		if (id === "record_and_transcribe") {

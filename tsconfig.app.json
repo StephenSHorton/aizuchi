@@ -32,6 +32,7 @@
 	"exclude": [
 		"src/lib/aizuchi/harness.ts",
 		"src/lib/cli-core",
-		"src/lib/cli-core/**/*"
+		"src/lib/cli-core/**/*",
+		"src/**/*.test.ts"
 	]
 }

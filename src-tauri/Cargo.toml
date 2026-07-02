@@ -14,6 +14,16 @@ edition = "2021"
 name = "aizuchi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# #109 (AIZ-50) — on-device speaker diarization via ONNX Runtime. OFF by
+# default: the default build uses the single-speaker Null fallback (see
+# `src/diarize.rs`), so `cargo build` / `cargo test` stay green and pull no
+# native ONNX Runtime dependency. Turn this on to run the real ECAPA/wespeaker
+# speaker embedder that produces multi-speaker IDs. NOTE: enabling it needs a
+# compile pass against ort's current API + a real-audio validation pass — see
+# the module docs in `src/diarize.rs`.
+onnx-diarize = ["dep:ort"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -53,6 +63,12 @@ opus-decoder = "0.1"
 # 0.13 to share the version `tauri-plugin-updater` already pulls in,
 # avoiding two reqwest versions in the binary.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "stream"] }
+# #109 (AIZ-50) — ONNX Runtime for the on-device speaker-embedding diarizer.
+# Optional + gated behind the `onnx-diarize` feature so the default build pulls
+# no native ONNX Runtime. Pinned to an exact pre-release: ort only publishes
+# 2.0.0-rc.* and a bare `2` requirement won't match a pre-release, which would
+# break resolution even when the feature is off.
+ort = { version = "=2.0.0-rc.12", optional = true }
 
 # IPC server (AIZ-20)
 hyper = { version = "1", features = ["http1", "server"] }

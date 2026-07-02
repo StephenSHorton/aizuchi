@@ -1,6 +1,7 @@
 mod audio;
 mod audio_import;
 mod cli_server;
+mod diarize;
 mod meetings;
 mod network;
 mod transcript_import;
