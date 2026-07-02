@@ -247,6 +247,7 @@ fn run_streaming_worker(
         let result = audio::ensure_model_with_progress(
             &model_path,
             audio::MODEL_URL,
+            audio::MIN_MODEL_BYTES,
             &abort,
             move |bytes, total| {
                 let percent = total

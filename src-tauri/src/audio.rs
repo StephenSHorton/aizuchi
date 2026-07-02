@@ -225,22 +225,31 @@ pub struct TranscriptSegment {
     pub text: String,
     pub start_ms: i64,
     pub end_ms: i64,
-    /// AIZ-14: always `"Speaker A"` for now. tinydiarize predicts a
-    /// per-segment "did the speaker just change" boolean, but it has no
-    /// concept of speaker identity (no embeddings) and its turn flag is
-    /// high-recall / low-precision — pauses, breaths, and filler tokens
-    /// trigger spurious turn predictions. Honouring those flags
-    /// monotonically increments a label index, so a single solo speaker
-    /// fragments into Speaker A → B → C across a long meeting. We
-    /// disable label cycling until a real embedding-based diarizer
-    /// lands; downstream extraction runs in Substance mode for live
-    /// (and already does for audio import).
+    /// #109 (AIZ-50): real embedding-derived speaker label ("Speaker A",
+    /// "Speaker B", …), assigned by the session `Diarizer`
+    /// (`crate::diarize`). Each segment's audio slice is embedded (ECAPA/
+    /// wespeaker ONNX) and online-clustered against a session-scoped
+    /// registry, so the same voice keeps the same label across windows and
+    /// chunks. In the default build (no `onnx-diarize` feature / no model),
+    /// the diarizer's Null fallback collapses everyone to "Speaker A" —
+    /// preserving #73's single-label behaviour without over-segmentation.
     pub speaker: String,
 }
 
-/// Constant speaker label used by every segment until a real diarizer
-/// replaces tinydiarize. See `TranscriptSegment::speaker` for context.
-const SPEAKER_LABEL: &str = "Speaker A";
+/// Slice the audio backing a segment out of a mono 16kHz buffer, given the
+/// segment's `[start_ms, end_ms)` range. 16 samples per millisecond at 16kHz.
+/// Clamps to the buffer bounds and returns an empty slice for an inverted or
+/// out-of-range range (the diarizer's gating then reuses the last speaker).
+fn slice_16k(samples: &[f32], start_ms: i64, end_ms: i64) -> &[f32] {
+    let n = samples.len();
+    let s = ((start_ms.max(0) as usize).saturating_mul(16)).min(n);
+    let e = ((end_ms.max(0) as usize).saturating_mul(16)).min(n);
+    if e > s {
+        &samples[s..e]
+    } else {
+        &[]
+    }
+}
 
 /// `[whisper] AIZ_DIARIZE_DEBUG=1` enables stderr logging of tdrz
 /// turn-flag observations. The flag is still produced by the model —
@@ -268,7 +277,17 @@ pub const MIN_MODEL_BYTES: u64 = 400_000_000;
 /// or cancellation.
 pub fn ensure_model(path: &Path, url: &str) -> Result<(), String> {
     let abort = AtomicBool::new(false);
-    ensure_model_with_progress(path, url, &abort, |_, _| {})
+    ensure_model_with_progress(path, url, MIN_MODEL_BYTES, &abort, |_, _| {})
+}
+
+/// Blocking download-and-cache with a caller-supplied minimum size. Used for
+/// the speaker-embedding model (#109), which is ~28MB — far below the whisper
+/// model's `MIN_MODEL_BYTES` floor. No progress reporting (the embedding model
+/// is small enough that the UI doesn't surface its download separately).
+#[allow(dead_code)] // only referenced under the `onnx-diarize` feature
+pub fn ensure_model_sized(path: &Path, url: &str, min_bytes: u64) -> Result<(), String> {
+    let abort = AtomicBool::new(false);
+    ensure_model_with_progress(path, url, min_bytes, &abort, |_, _| {})
 }
 
 /// Like `ensure_model`, but invokes `on_progress(downloaded_bytes, total_bytes)`
@@ -285,6 +304,7 @@ pub fn ensure_model(path: &Path, url: &str) -> Result<(), String> {
 pub fn ensure_model_with_progress<F>(
     path: &Path,
     url: &str,
+    min_bytes: u64,
     abort: &AtomicBool,
     mut on_progress: F,
 ) -> Result<(), String>
@@ -293,12 +313,12 @@ where
 {
     if path.exists() {
         match std::fs::metadata(path) {
-            Ok(meta) if meta.len() >= MIN_MODEL_BYTES => return Ok(()),
+            Ok(meta) if meta.len() >= min_bytes => return Ok(()),
             Ok(meta) => {
                 eprintln!(
                     "[whisper] removing partial model ({} bytes < {} required)",
                     meta.len(),
-                    MIN_MODEL_BYTES
+                    min_bytes
                 );
                 std::fs::remove_file(path).ok();
             }
@@ -449,12 +469,14 @@ pub fn transcribe_file(
 /// caller sees segments as the encoder produces them, instead of waiting
 /// for `state.full(...)` to return at the end.
 ///
-/// The safe whisper-rs callback (`set_segment_callback_safe`) hides the
-/// speaker-turn flag, so every emitted segment is labelled "Speaker A".
-/// Audio import forces Substance extraction mode (see `audio_import.rs`),
-/// so the speaker label is unused by the downstream prompt — losing it
-/// here costs nothing today and keeps the streaming hot path free of
-/// type-confused FFI handling.
+/// #109 — each emitted segment carries a real embedding-derived speaker
+/// label. The safe whisper-rs callback (`set_segment_callback_safe`) hides
+/// tinydiarize's speaker-turn flag, but we no longer need it: a session
+/// `Diarizer` slices the segment's PCM out of the decoded buffer, embeds it,
+/// and online-clusters it into a stable "Speaker A/B/…" label. (Audio import
+/// still forces Substance mode at stage time — see `audio_import.rs`;
+/// switching that to per-speaker attribution is #98, which needs the
+/// mid-stream mode flip these labels now make possible.)
 ///
 /// The abort path uses the *unsafe* whisper-rs API: `set_abort_callback`
 /// + `set_abort_callback_user_data` driven by an `AtomicBool` we point
@@ -488,6 +510,9 @@ where
         return Err("Audio file decoded to zero samples".into());
     }
     let duration_ms = (samples.len() as i64) * 1000 / 16_000;
+    // #109 — share the decoded PCM with the segment callback so each
+    // segment's audio can be sliced for speaker embedding.
+    let samples = Arc::new(samples);
 
     let model_str = model_path
         .to_str()
@@ -514,17 +539,25 @@ where
     params.set_tdrz_enable(true);
 
     let mut on_seg = on_segment;
+    // #109 — session diarizer + a clone of the decoded audio, both moved into
+    // the segment callback. The diarizer is session-scoped so speaker labels
+    // stay stable across the whole file, not just within one callback.
+    let mut diarizer = crate::diarize::build_session_diarizer();
+    let diar_samples = samples.clone();
     params.set_segment_callback_safe(move |data: SegmentCallbackData| {
         let text = data.text.trim().to_string();
         if text.is_empty() {
             return;
         }
         // whisper.cpp returns timestamps in 10ms units.
+        let start_ms = data.start_timestamp * 10;
+        let end_ms = data.end_timestamp * 10;
+        let speaker = diarizer.label_string(slice_16k(&diar_samples, start_ms, end_ms));
         on_seg(TranscriptSegment {
             text,
-            start_ms: data.start_timestamp * 10,
-            end_ms: data.end_timestamp * 10,
-            speaker: SPEAKER_LABEL.to_string(),
+            start_ms,
+            end_ms,
+            speaker,
         });
     });
 
@@ -546,7 +579,7 @@ where
     }
 
     let result = state
-        .full(params, &samples)
+        .full(params, &samples[..])
         .map_err(|e| format!("Whisper inference failed: {e}"));
     // Keep `abort` alive at least until state.full returns. Without an
     // explicit drop the optimizer is free to drop it earlier as long as
@@ -603,6 +636,9 @@ fn transcribe_samples(
     let mut segments = Vec::with_capacity(n as usize);
     let debug = diarize_debug_enabled();
     let mut turn_count = 0usize;
+    // #109 — session diarizer for this transcription. Each segment's audio
+    // slice is embedded + online-clustered into a stable speaker label.
+    let mut diarizer = crate::diarize::build_session_diarizer();
     for i in 0..n {
         let segment = state
             .get_segment(i)
@@ -615,17 +651,19 @@ fn transcribe_samples(
         let t1 = segment.end_timestamp();
         // AIZ-14: tdrz still emits a turn flag, but we no longer let it
         // drive labels — see `TranscriptSegment::speaker`. Surface the
-        // raw flags under a debug env var so we can profile precision
-        // when wiring up a proper diarizer.
+        // raw flags under a debug env var so we can profile precision.
         if debug && segment.next_segment_speaker_turn() {
             turn_count += 1;
         }
-        // whisper.cpp returns timestamps in 10ms units
+        // whisper.cpp returns timestamps in 10ms units.
+        let start_ms = t0 * 10;
+        let end_ms = t1 * 10;
+        let speaker = diarizer.label_string(slice_16k(samples, start_ms, end_ms));
         segments.push(TranscriptSegment {
             text: text.trim().to_string(),
-            start_ms: t0 * 10,
-            end_ms: t1 * 10,
-            speaker: SPEAKER_LABEL.to_string(),
+            start_ms,
+            end_ms,
+            speaker,
         });
     }
     if debug {
@@ -1149,13 +1187,13 @@ where
         let mut next_start = 0usize;
         // Track absolute meeting time for emitted timestamps
         let session_start = std::time::Instant::now();
-        // AIZ-14: tdrz's speaker-turn flag is high-recall / low-precision
-        // and over-segments a single human speaker into several "Speaker
-        // X" labels across a long meeting (pauses, breaths, fillers all
-        // trigger it). We keep tdrz enabled for parity with the offline
-        // path but emit a constant label per segment until a real
-        // embedding-based diarizer lands. The flag is still observable
-        // and is logged under `AIZ_DIARIZE_DEBUG=1` for future analysis.
+        // #109 — one diarizer for the whole capture session. Its registry
+        // persists across windows/chunks, so a given voice keeps a stable
+        // "Speaker A/B/…" label for the entire meeting (acceptance #4).
+        // tdrz stays enabled for decode parity with the offline path, but its
+        // speaker-turn flag no longer drives labels; it's only logged under
+        // `AIZ_DIARIZE_DEBUG=1` for analysis.
+        let mut diarizer = crate::diarize::build_session_diarizer();
         let debug = diarize_debug_enabled();
 
         while !trans_stop.load(Ordering::Relaxed) {
@@ -1213,13 +1251,17 @@ where
                 if text.is_empty() {
                     continue;
                 }
+                // Timestamps are 10ms units relative to the window start; the
+                // 16kHz PCM for the segment lives at the same offsets in
+                // `resampled`, so slice there for the speaker embedding.
                 let t0 = segment.start_timestamp() * 10;
                 let t1 = segment.end_timestamp() * 10;
+                let speaker = diarizer.label_string(slice_16k(&resampled, t0, t1));
                 on_segment(TranscriptSegment {
                     text,
                     start_ms: window_offset_ms + t0,
                     end_ms: window_offset_ms + t1,
-                    speaker: SPEAKER_LABEL.to_string(),
+                    speaker,
                 });
             }
             if debug {
