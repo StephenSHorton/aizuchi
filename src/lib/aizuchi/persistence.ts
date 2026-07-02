@@ -39,6 +39,18 @@ export interface MeetingSnapshot {
 	startedAt: number;
 	endedAt: number;
 	mode: MeetingMode;
+	/**
+	 * The live concept graph. Each rich node's `body` is the ACCUMULATED,
+	 * merged OpenUI Lang source after every incremental patch applied so far
+	 * (AIZ-60 / #119) — `normalizeDiff` merges `body_patch` updates into the
+	 * node's body before `applyDiff` writes it here, so persisting the graph
+	 * persists the cumulative body with no extra bookkeeping.
+	 *
+	 * Follow-up (out of scope for #119): store a per-node (timestamp, patch)
+	 * history alongside the merged source for replay / visual diff. Skipped
+	 * for now — the merged source is the source of truth the canvas renders;
+	 * history would only serve future debug/diff UX.
+	 */
 	graph: Graph;
 	thoughts: AIThoughtRecord[];
 	transcript: TranscriptChunk[];

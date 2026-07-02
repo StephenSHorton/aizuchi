@@ -243,6 +243,109 @@ For EVERY node in \`add_nodes\`: confirm \`body\` is populated, \`root = Card(..
 `;
 
 /**
+ * AIZ-60 / #119 — incremental-editing ("patch mode") instructions.
+ *
+ * OpenUI Lang has native incremental editing (its \`editMode: true\` prompt
+ * config, exposed via \`@openuidev/lang-core\`'s \`generatePrompt\` /
+ * \`Library.prompt({ editMode: true })\` and applied at merge time by
+ * \`mergeStatements\`): the model emits only the changed/new statements and
+ * the runtime merges them by statement name. We deliberately author this
+ * block against Aizuchi's curated \`Card\` component subset rather than
+ * injecting the library's generic \`editMode\` prompt text — that generic
+ * text teaches \`root = Root(...)\` and \`Stack(...)\`, which are NOT in our
+ * subset and would mislead Gemma (already at the edge of its DSL capability).
+ * The merge SEMANTICS below match \`mergeStatements\` exactly; the component
+ * vocabulary matches OPENUI_LANG_NODE_BODY above. This is the same reason the
+ * base body prompt is hand-curated (see AIZ-52 note).
+ *
+ * Appended only when the body prompt is built with \`editMode: true\`.
+ */
+const OPENUI_LANG_PATCH_MODE = `## Incremental editing — patch an existing body instead of rewriting it
+
+When you \`update_nodes\` a rich node that already has a \`body\`, you usually only need to change a small part of it (bump a risk's severity, add a data point to a metric, narrow a decision's alternatives). Don't regenerate the whole body. Emit a **patch**: only the OpenUI Lang statements that changed or are new.
+
+**How to signal a patch:** put the changed/new statements in a \`body_patch\` field on the \`update_nodes\` entry (NOT \`body\`). \`body\` means "replace the entire body"; \`body_patch\` means "merge these statements into the current body."
+
+**Merge semantics (how the patch is applied):**
+- Statements merge **by name**. A statement in your patch with the **same name** as an existing one **replaces** it. A statement with a **new name** is **added**.
+- Statements you **don't mention are kept** automatically — never re-send unchanged statements.
+- After merging, any statement no longer reachable from \`root\` is dropped. So to **remove** a child, re-declare its parent (usually \`root = Card([...])\`) without it.
+- **Reuse the existing statement names exactly** — do not rename \`callout\`, \`head\`, \`chart\`, etc. Renaming orphans the old statement and loses the change.
+- A typical patch is 1–3 statements. If you're emitting the whole body again, use \`body\` (full replace) instead.
+
+**Patch against ground truth.** The node's CURRENT body source is in the \`## Current graph state\` block. Patch against what is actually there — the exact statement names it uses — not what you imagine it contains. If you can't see a stable name to target, send a full \`body\` replacement instead.
+
+### Worked examples
+
+**1. A risk's severity is now confirmed higher.** Current body:
+
+\`\`\`
+root = Card([head, callout])
+head = CardHeader("Campaign inconsistency")
+callout = Callout("warning", "Medium likelihood / high impact", "Flipping between the two campaigns causes bugs.")
+\`\`\`
+
+New evidence confirms it's high/high. Emit as \`body_patch\` on the update — only the \`callout\` line changes:
+
+\`\`\`
+callout = Callout("danger", "High likelihood / high impact", "Now confirmed: constant flipping is causing customer-visible bugs.")
+\`\`\`
+
+\`head\` and \`root\` are untouched, so they're kept.
+
+**2. A metric gets a new data point.** Current body:
+
+\`\`\`
+root = Card([head, chart])
+head = CardHeader("Weekly active users")
+chart = LineChart(["Wk 1", "Wk 2", "Wk 3"], [series1])
+series1 = Series("WAU", [12400, 13100, 13900])
+\`\`\`
+
+Week 4 came in at 14600. Patch the label list and the series — two statements:
+
+\`\`\`
+chart = LineChart(["Wk 1", "Wk 2", "Wk 3", "Wk 4"], [series1])
+series1 = Series("WAU", [12400, 13100, 13900, 14600])
+\`\`\`
+
+**3. A decision narrows its alternatives.** Current body:
+
+\`\`\`
+root = Card([head, why, alt])
+head = CardHeader("Datastore for the new service")
+why = TextContent("Leaning Postgres for window-function support.")
+alt = TextCallout("info", "Alternatives weighed", "MySQL, DynamoDB.")
+\`\`\`
+
+They ruled out DynamoDB and committed to Postgres. Patch the two statements that changed:
+
+\`\`\`
+head = CardHeader("Postgres over MySQL", "decided")
+alt = TextCallout("info", "Alternative weighed", "MySQL (simpler ops); DynamoDB ruled out.")
+\`\`\`
+
+### Patch-mode rules
+- Prefer \`body_patch\` for refining an existing rich node; reach for full \`body\` only when the whole thing is being rewritten.
+- Only rich types (\`decision\`, \`risk\`, \`metric\`, \`event\`) carry patchable bodies. Don't emit \`body_patch\` for a node that has no body yet — give it a full \`body\` instead.
+- If nothing about the body genuinely changed, don't emit \`body\` or \`body_patch\` at all — just update the fields that changed (\`status\`, \`tags\`, …).
+- A patch that references a statement name that doesn't exist will be rejected and the old body kept — so target real, existing names.
+`;
+
+/**
+ * AIZ-60 / #119 — assemble the node-body prompt. When \`editMode\` is true the
+ * incremental-editing (patch) instructions are appended — this is how we
+ * "wire" OpenUI Lang's \`editMode\` prompt-config flag into our hand-curated
+ * prompt. Streaming passes build with \`editMode: true\` so the model may emit
+ * \`body_patch\` updates as the transcript evolves.
+ */
+function openuiLangNodeBody(opts: { editMode: boolean }): string {
+	return opts.editMode
+		? `${OPENUI_LANG_NODE_BODY}\n${OPENUI_LANG_PATCH_MODE}`
+		: OPENUI_LANG_NODE_BODY;
+}
+
+/**
  * AIZ-32 — attribution-mode system prompt (today's behavior). Used when
  * the input has 2+ distinct named speakers. Includes the `person` node
  * type and speaker-aware extraction guidance.
@@ -468,7 +571,7 @@ You: You can take an existing potato, plant it in the ground, and it grows more 
 
 Note: the chunk mentions three facets of one thing (propagation, sustainability, culinary use). Old style would have emitted four nodes linked by \`related_to\`. New style folds the facets into one rich \`topic\` body using \`ListBlock\` — fewer nodes, denser substance, no \`related_to\` clutter. The \`mentions\` edge from \`you\` is kept because there's no more specific relation between speaker and topic.
 
-${OPENUI_LANG_NODE_BODY}`;
+${openuiLangNodeBody({ editMode: true })}`;
 
 /**
  * AIZ-32 — substance-mode system prompt. Used when the input has 0 or 1
@@ -706,7 +809,7 @@ unknown: Transcript import sidesteps that entirely. If we drop realtime pacing f
 
 Note: no \`person\` nodes, no \`speaker\` fields, no person-anchored edges. Two distinct nodes with distinct lifecycles (the blocker exists independently; the work_item is a proposed solution). The edge \`transcript_import resolves realtime_pacing_constraint\` reads as a proposition. An old-style \`topic\` node for "extraction-pipeline testing" plus \`related_to\` edges would have added a generic anchor and ambiguous edges with no new substance — dropped.
 
-${OPENUI_LANG_NODE_BODY}`;
+${openuiLangNodeBody({ editMode: true })}`;
 
 /**
  * AIZ-32 — pick the system prompt that matches the input. Defaults to
@@ -794,7 +897,7 @@ The \`notes\` array works the same way — emit new or changed thoughts only. Af
 
 A standard \`GraphDiff\`. \`no_changes: false\` in almost every case. The downstream \`applyDiff\` path is the same one the streaming passes use — there is no separate finalize-only diff format.
 
-${OPENUI_LANG_NODE_BODY}
+${openuiLangNodeBody({ editMode: true })}
 
 ### Finalize-pass specific note
 

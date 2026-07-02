@@ -40,8 +40,14 @@ function summarizeDiff(diff: import("./schemas").GraphDiff): string {
 			`+${diff.add_nodes.length} nodes [${diff.add_nodes.map((n) => n.id).join(", ")}]`,
 		);
 	if (diff.add_edges.length > 0) parts.push(`+${diff.add_edges.length} edges`);
-	if (diff.update_nodes.length > 0)
-		parts.push(`~${diff.update_nodes.length} updates`);
+	if (diff.update_nodes.length > 0) {
+		const withBody = diff.update_nodes.filter(
+			(u) => u.body !== undefined,
+		).length;
+		parts.push(
+			`~${diff.update_nodes.length} updates${withBody > 0 ? ` (${withBody} body)` : ""}`,
+		);
+	}
 	if (diff.merge_nodes.length > 0)
 		parts.push(
 			`merge: ${diff.merge_nodes.map((m) => `${m.absorb.join("+")}→${m.keep}`).join(", ")}`,
@@ -99,11 +105,15 @@ async function main() {
 				r.droppedRedundantRelatedTo ||
 				r.droppedTrivialMentions ||
 				r.droppedSelfLoops ||
-				r.droppedDuplicateEdges
+				r.droppedDuplicateEdges ||
+				r.bodyPatchesApplied ||
+				r.bodyPatchesFailed
 			) {
 				const fixes: string[] = [];
 				if (r.addedPersonNodes.length)
-					fixes.push(`+${r.addedPersonNodes.length} person [${r.addedPersonNodes.join(", ")}]`);
+					fixes.push(
+						`+${r.addedPersonNodes.length} person [${r.addedPersonNodes.join(", ")}]`,
+					);
 				if (r.droppedRedundantRelatedTo)
 					fixes.push(`-${r.droppedRedundantRelatedTo} redundant related_to`);
 				if (r.droppedTrivialMentions)
@@ -113,6 +123,10 @@ async function main() {
 					fixes.push(`-${r.droppedDuplicateEdges} duplicate edges`);
 				if (r.droppedPersonMerges)
 					fixes.push(`-${r.droppedPersonMerges} bad person-person merges`);
+				if (r.bodyPatchesApplied)
+					fixes.push(`+${r.bodyPatchesApplied} body patches`);
+				if (r.bodyPatchesFailed)
+					fixes.push(`-${r.bodyPatchesFailed} body patches (fell back)`);
 				console.log(`  normalize: ${fixes.join(", ")}`);
 			}
 
