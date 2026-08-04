@@ -1,0 +1,80 @@
+{
+  "nodes": [
+    {
+      "id": "travis_chen",
+      "label": "Travis Chen",
+      "type": "person"
+    },
+    {
+      "id": "priya_singh",
+      "label": "Priya Singh",
+      "type": "person"
+    },
+    {
+      "id": "alex_park",
+      "label": "Alex Park",
+      "type": "person"
+    },
+    {
+      "id": "mira_rao",
+      "label": "Mira Rao",
+      "type": "person"
+    },
+    {
+      "id": "postgres_migration",
+      "label": "Postgres migration",
+      "type": "work_item",
+      "description": "Migrate the primary order-service database from MySQL 5.7 to Postgres 16."
+    }
+  ],
+  "edges": [
+    {
+      "id": "travis_chen-owns-postgres_migration",
+      "from": "travis_chen",
+      "to": "postgres_migration",
+      "relation": "owns"
+    },
+    {
+      "id": "alex_park-related_to-priya_singh",
+      "from": "alex_park",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "mira_rao-related_to-travis_chen",
+      "from": "mira_rao",
+      "to": "travis_chen",
+      "relation": "related_to"
+    },
+    {
+      "id": "travis_chen-related_to-postgres_migration",
+      "from": "travis_chen",
+      "to": "postgres_migration",
+      "relation": "related_to"
+    },
+    {
+      "id": "alex_park-related_to-travis_chen",
+      "from": "alex_park",
+      "to": "travis_chen",
+      "relation": "related_to"
+    },
+    {
+      "id": "postgres_migration-related_to-priya_singh",
+      "from": "postgres_migration",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "mira_rao-related_to-postgres_migration",
+      "from": "mira_rao",
+      "to": "postgres_migration",
+      "relation": "related_to"
+    },
+    {
+      "id": "travis_chen-related_to-priya_singh",
+      "from": "travis_chen",
+      "to": "priya_singh",
+      "relation": "related_to"
+    }
+  ]
+}

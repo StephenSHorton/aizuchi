@@ -1,0 +1,241 @@
+{
+  "nodes": [
+    {
+      "id": "priya_singh",
+      "label": "Priya Singh",
+      "type": "person"
+    },
+    {
+      "id": "alex_park",
+      "label": "Alex Park",
+      "type": "person"
+    },
+    {
+      "id": "postgres_migration",
+      "label": "Postgres migration",
+      "type": "work_item",
+      "description": "Migrate the primary order-service database from MySQL 5.7 to Postgres 16."
+    },
+    {
+      "id": "ios_push_fix",
+      "label": "iOS push notification fix",
+      "type": "work_item",
+      "description": "Fix silent-push regression that broke on iOS 26 due to APS payload validation."
+    },
+    {
+      "id": "badge_ux",
+      "label": "Badge UX redesign",
+      "type": "work_item",
+      "description": "Rework the unread-count badge so it doesn't overflow at >99 events."
+    },
+    {
+      "id": "use_pgbouncer",
+      "label": "Use pgbouncer for pooling",
+      "type": "decision",
+      "alternative": "RDS Proxy",
+      "description": "Chose pgbouncer over RDS Proxy because of cost and Tahoe compatibility."
+    },
+    {
+      "id": "pgbouncer_hypothesis",
+      "label": "pgbouncer cuts conn count 10x",
+      "type": "hypothesis",
+      "prediction": "Connection count drops from ~2k to ~200 against the primary."
+    },
+    {
+      "id": "runbook_doc",
+      "label": "Cutover runbook (Notion)",
+      "type": "artifact",
+      "description": "Notion page with step-by-step cutover plan, owners, and rollback gate."
+    },
+    {
+      "id": "release_topic",
+      "label": "Release planning",
+      "type": "topic"
+    },
+    {
+      "id": "ios_topic",
+      "label": "iOS mobile",
+      "type": "topic"
+    },
+    {
+      "id": "pgbouncer_artifact",
+      "label": "pgbouncer config",
+      "type": "artifact"
+    },
+    {
+      "id": "rds_proxy_alt",
+      "label": "RDS Proxy alternative",
+      "type": "context",
+      "description": "AWS-managed option weighed against pgbouncer; rejected on cost."
+    },
+    {
+      "id": "shipping_decision",
+      "label": "Ship behind feature flag",
+      "type": "decision",
+      "alternative": "Ship dark + canary",
+      "description": "Ship the new iOS push path behind FF, ramp 5/25/100 over the week."
+    },
+    {
+      "id": "test_coverage_gap",
+      "label": "Push-fix test coverage gap",
+      "type": "blocker",
+      "description": "No integration test exists for the silent-push payload path."
+    },
+    {
+      "id": "alex_owns_push",
+      "label": "Alex owns the iOS push work",
+      "type": "context"
+    },
+    {
+      "id": "q_who_does_badge",
+      "label": "Who owns the badge UX?",
+      "type": "question"
+    },
+    {
+      "id": "badge_overflow_event",
+      "label": "Badge overflow reported on Slack",
+      "type": "event",
+      "occurredAt": "last Tuesday"
+    }
+  ],
+  "edges": [
+    {
+      "id": "priya_singh-owns-badge_ux",
+      "from": "priya_singh",
+      "to": "badge_ux",
+      "relation": "owns"
+    },
+    {
+      "id": "alex_park-owns-ios_push_fix",
+      "from": "alex_park",
+      "to": "ios_push_fix",
+      "relation": "owns"
+    },
+    {
+      "id": "postgres_migration-depends_on-use_pgbouncer",
+      "from": "postgres_migration",
+      "to": "use_pgbouncer",
+      "relation": "depends_on"
+    },
+    {
+      "id": "use_pgbouncer-decides-postgres_migration",
+      "from": "use_pgbouncer",
+      "to": "postgres_migration",
+      "relation": "decides"
+    },
+    {
+      "id": "pgbouncer_hypothesis-supports-use_pgbouncer",
+      "from": "pgbouncer_hypothesis",
+      "to": "use_pgbouncer",
+      "relation": "supports"
+    },
+    {
+      "id": "rds_proxy_alt-alternative_to-use_pgbouncer",
+      "from": "rds_proxy_alt",
+      "to": "use_pgbouncer",
+      "relation": "alternative_to"
+    },
+    {
+      "id": "runbook_doc-clarifies-postgres_migration",
+      "from": "runbook_doc",
+      "to": "postgres_migration",
+      "relation": "clarifies"
+    },
+    {
+      "id": "shipping_decision-decides-ios_push_fix",
+      "from": "shipping_decision",
+      "to": "ios_push_fix",
+      "relation": "decides"
+    },
+    {
+      "id": "test_coverage_gap-blocks-ios_push_fix",
+      "from": "test_coverage_gap",
+      "to": "ios_push_fix",
+      "relation": "blocks"
+    },
+    {
+      "id": "badge_overflow_event-precedes-badge_ux",
+      "from": "badge_overflow_event",
+      "to": "badge_ux",
+      "relation": "precedes"
+    },
+    {
+      "id": "alex_park-mentions-ios_topic",
+      "from": "alex_park",
+      "to": "ios_topic",
+      "relation": "mentions"
+    },
+    {
+      "id": "q_who_does_badge-asks-badge_ux",
+      "from": "q_who_does_badge",
+      "to": "badge_ux",
+      "relation": "asks"
+    },
+    {
+      "id": "priya_singh-decides-shipping_decision",
+      "from": "priya_singh",
+      "to": "shipping_decision",
+      "relation": "decides"
+    },
+    {
+      "id": "use_pgbouncer-related_to-postgres_migration",
+      "from": "use_pgbouncer",
+      "to": "postgres_migration",
+      "relation": "related_to"
+    },
+    {
+      "id": "priya_singh-related_to-alex_park",
+      "from": "priya_singh",
+      "to": "alex_park",
+      "relation": "related_to"
+    },
+    {
+      "id": "test_coverage_gap-related_to-runbook_doc",
+      "from": "test_coverage_gap",
+      "to": "runbook_doc",
+      "relation": "related_to"
+    },
+    {
+      "id": "badge_overflow_event-related_to-pgbouncer_hypothesis",
+      "from": "badge_overflow_event",
+      "to": "pgbouncer_hypothesis",
+      "relation": "related_to"
+    },
+    {
+      "id": "badge_ux-related_to-priya_singh",
+      "from": "badge_ux",
+      "to": "priya_singh",
+      "relation": "related_to"
+    },
+    {
+      "id": "priya_singh-related_to-test_coverage_gap",
+      "from": "priya_singh",
+      "to": "test_coverage_gap",
+      "relation": "related_to"
+    },
+    {
+      "id": "priya_singh-related_to-runbook_doc",
+      "from": "priya_singh",
+      "to": "runbook_doc",
+      "relation": "related_to"
+    },
+    {
+      "id": "alex_owns_push-related_to-postgres_migration",
+      "from": "alex_owns_push",
+      "to": "postgres_migration",
+      "relation": "related_to"
+    },
+    {
+      "id": "postgres_migration-related_to-runbook_doc",
+      "from": "postgres_migration",
+      "to": "runbook_doc",
+      "relation": "related_to"
+    },
+    {
+      "id": "test_coverage_gap-related_to-release_topic",
+      "from": "test_coverage_gap",
+      "to": "release_topic",
+      "relation": "related_to"
+    }
+  ]
+}

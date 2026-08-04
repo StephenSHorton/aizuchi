@@ -1,0 +1,27 @@
+[
+  {
+    "id": "rollback_uncertainty",
+    "text": "Mira flagged the rollback plan but the team hasn't agreed on a hard rollback window yet.",
+    "intent": "unresolved",
+    "references": [
+      "postgres_migration",
+      "rollback_plan_q"
+    ]
+  },
+  {
+    "id": "badge_ownership_gap",
+    "text": "Badge UX overflow has been raised twice now with no clear owner \u2014 Alex tentatively offered to pick it up.",
+    "intent": "pattern",
+    "references": [
+      "badge_ux"
+    ]
+  },
+  {
+    "id": "staging_pool_recurrence",
+    "text": "Connection pool exhaustion on staging is a recurring blocker; pgbouncer is the bet to fix it.",
+    "intent": "observation",
+    "references": [
+      "staging_db_outage"
+    ]
+  }
+]

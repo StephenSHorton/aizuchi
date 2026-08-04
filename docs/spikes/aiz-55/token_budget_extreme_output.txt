@@ -1,0 +1,29 @@
+====================================================================================================
+AIZ-55 follow-up: compression sweep
+====================================================================================================
+Reference GraphDiff response: 444 tokens
+Floor: 1000 output tokens
+Compact system prompt: 340 tokens (1541 chars)
+
+Compact prompt across sizes (no schema injection):
+  label                              sys  total_in  remaining  floor≥1000   ref-fits
+   3-node graph                    340      1307       2789        PASS       PASS
+   5-node graph                    340      1522       2574        PASS       PASS
+   8-node graph                    340      1913       2183        PASS       PASS
+  10-node graph                    340      2197       1899        PASS       PASS
+  15-node graph                    340      2891       1205        PASS       PASS
+  20-node graph                    340      3577        519        FAIL       PASS
+
+Compact prompt + eviction on a 30-node graph (keep_n sweep):
+  keep_n   after_evict    graph_tok  remaining  floor≥1000
+  3        6 of 30             475       2662        PASS
+  5        12 of 30            1253       1884        PASS
+  8        17 of 30            1824       1313        PASS
+  10       23 of 30            2804        333        FAIL
+  15       28 of 30            3435       -298        FAIL
+
+Drop the recent-transcript window (lean on FM session multi-turn instead):
+  label                              sys  graph  recent  total_in  remaining
+  10-node graph, no recent         340   1238 0 (drop)      1926       2170
+  15-node graph, no recent         340   1932 0 (drop)      2620       1476
+  20-node graph, no recent         340   2618 0 (drop)      3306        790
