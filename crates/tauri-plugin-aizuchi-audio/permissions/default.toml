@@ -1,0 +1,14 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+Default permissions for aizuchi-audio: allow checking and requesting
+microphone permission, starting and stopping a capture session, and
+listening to the per-capture event channel.
+"""
+permissions = [
+    "allow-check-permissions",
+    "allow-request-permissions",
+    "allow-start-capture",
+    "allow-stop-capture",
+]
